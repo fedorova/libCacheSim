@@ -134,47 +134,55 @@ typedef struct {
   bool new_obj;
 } __attribute__((packed)) myclock_obj_params_t;
 
+typedef struct {
+    int64_t last_access_vtime;
+    int64_t read_generation;
+    int32_t page_type;
+} WT_obj_metadata_t;
+
+
 // ############################## cache obj ###################################
 struct cache_obj;
 typedef struct cache_obj {
-  struct cache_obj *hash_next;
-  obj_id_t obj_id;
-  uint32_t obj_size;
-  struct {
-    struct cache_obj *prev;
-    struct cache_obj *next;
-  } queue;  // for LRU, FIFO, etc.
+    struct cache_obj *hash_next;
+    obj_id_t obj_id;
+    uint32_t obj_size;
+    struct {
+        struct cache_obj *prev;
+        struct cache_obj *next;
+    } queue;  // for LRU, FIFO, etc.
 #ifdef SUPPORT_TTL
-  uint32_t exp_time;
+    uint32_t exp_time;
 #endif
 /* age is defined as the time since the object entered the cache */
 #if defined(TRACK_EVICTION_V_AGE) || \
     defined(TRACK_DEMOTION) || defined(TRACK_CREATE_TIME)
-  int64_t create_time;
+    int64_t create_time;
 #endif
-  // used by belady related algorithsm
-  misc_metadata_t misc;
+    // used by belady related algorithsm
+    misc_metadata_t misc;
 
-  union {
-    LFU_obj_metadata_t lfu;          // for LFU
-    Clock_obj_metadata_t clock;      // for Clock
-    Size_obj_metadata_t Size;        // for Size
-    ARC_obj_metadata_t ARC;          // for ARC
-    LeCaR_obj_metadata_t LeCaR;      // for LeCaR
-    Cacheus_obj_metadata_t Cacheus;  // for Cacheus
-    SR_LRU_obj_metadata_t SR_LRU;
-    CR_LFU_obj_metadata_t CR_LFU;
-    Hyperbolic_obj_metadata_t hyperbolic;
-    Belady_obj_metadata_t Belady;
-    FIFO_Merge_obj_metadata_t FIFO_Merge;
-    FIFO_Reinsertion_obj_metadata_t FIFO_Reinsertion;
-    SFIFO_obj_metadata_t SFIFO;
-    SLRU_obj_metadata_t SLRU;
-    QDLP_obj_metadata_t QDLP;
-    LIRS_obj_metadata_t LIRS;
-    S3FIFO_obj_metadata_t S3FIFO;
-    myclock_obj_params_t myclock;
-    Sieve_obj_params_t sieve;
+    union {
+        LFU_obj_metadata_t lfu;          // for LFU
+        Clock_obj_metadata_t clock;      // for Clock
+        Size_obj_metadata_t Size;        // for Size
+        ARC_obj_metadata_t ARC;          // for ARC
+        LeCaR_obj_metadata_t LeCaR;      // for LeCaR
+        Cacheus_obj_metadata_t Cacheus;  // for Cacheus
+        SR_LRU_obj_metadata_t SR_LRU;
+        CR_LFU_obj_metadata_t CR_LFU;
+        Hyperbolic_obj_metadata_t hyperbolic;
+        Belady_obj_metadata_t Belady;
+        FIFO_Merge_obj_metadata_t FIFO_Merge;
+        FIFO_Reinsertion_obj_metadata_t FIFO_Reinsertion;
+        SFIFO_obj_metadata_t SFIFO;
+        SLRU_obj_metadata_t SLRU;
+        QDLP_obj_metadata_t QDLP;
+        LIRS_obj_metadata_t LIRS;
+        S3FIFO_obj_metadata_t S3FIFO;
+        myclock_obj_params_t myclock;
+        Sieve_obj_params_t sieve;
+        WT_obj_metadata_t wt_page;         // for WiredTiger
 
 #if defined(ENABLE_GLCACHE) && ENABLE_GLCACHE == 1
     GLCache_obj_metadata_t GLCache;

@@ -37,6 +37,12 @@ typedef struct {
   int64_t n_byte_rewritten;
 } Clock_params_t;
 
+typedef struct {
+    //TODO
+    uint32_t global_read_generation;
+} WT_params_t;
+
+
 cache_t *ARC_init(const common_cache_params_t ccache_params,
                   const char *cache_specific_params);
 
@@ -154,6 +160,9 @@ cache_t *FIFO_Belady_init(const common_cache_params_t ccache_params,
                           const char *cache_specific_params);
 
 cache_t *Sieve_init(const common_cache_params_t ccache_params,
+                    const char *cache_specific_params);
+
+cache_t *WT_init(const common_cache_params_t ccache_params,
                     const char *cache_specific_params);
 
 #ifdef ENABLE_LRB

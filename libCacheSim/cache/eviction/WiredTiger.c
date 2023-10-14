@@ -21,10 +21,10 @@ static bool LRU_remove(cache_t *cache, const obj_id_t obj_id);
 static void LRU_print_cache(const cache_t *cache);
 
 /**
- * @brief initialize a LRU cache
+ * @brief initialize a WiredTiger cache
  *
  * @param ccache_params some common cache parameters
- * @param cache_specific_params LRU specific parameters, should be NULL
+ * @param cache_specific_params WiredTiger specific parameters, should be NULL
  */
 cache_t *WT_init(const common_cache_params_t ccache_params,
                   const char *cache_specific_params) {

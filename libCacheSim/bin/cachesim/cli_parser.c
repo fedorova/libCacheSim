@@ -198,7 +198,7 @@ static char doc[] =
     "trace can be zstd compressed\n"
     "cache_size is in byte, but also support KB/MB/GB\n"
     "supported trace_type: txt/csv/twr/vscsi/oracleGeneralBin\n"
-    "supported eviction_algo: LRU/LFU/FIFO/ARC/LeCaR/Cacheus\n";
+    "supported eviction_algo: LRU/LFU/FIFO/ARC/LeCaR/Cacheus/WiredTiger (or WT)\n";
 
 /**
  * @brief initialize the arguments
