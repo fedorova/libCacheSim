@@ -49,6 +49,10 @@ typedef struct {
   int cnt_field;
   int next_access_vtime_field;
 
+    /* Additional fields for WiredTiger traces */
+    int read_gen_field;
+    int parent_addr_field;
+
   // csv reader
   bool has_header;
   // whether the has_header is set, because false could indicate
@@ -143,6 +147,9 @@ static inline void set_default_reader_init_params(reader_init_param_t *params) {
   params->op_field = 0;
   params->ttl_field = 0;
   params->next_access_vtime_field = 0;
+
+  params->read_gen = 0;
+  params->parent_addr = 0;
 
   params->has_header = false;
   /* whether the user has specified the has_header params */

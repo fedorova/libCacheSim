@@ -218,8 +218,11 @@ static inline void csv_cb1(void *s, size_t len, void *data) {
     }
   } else if (csv_params->curr_field_idx == csv_params->cnt_field_idx) {
     reader->n_req_left = (uint64_t)strtoull((char *)s, &end, 0) - 1;
+  } else if (csv_params->curr_field_idx == csv_params->read_gen_idx) {
+      req->read_gen = (uint32_t)strtoul((char *)s, &end, 0);
+  }  else if (csv_params->curr_field_idx == csv_params->parent_addr_idx) {
+      req->parent_addr = (uint32_t)strtoul((char *)s, &end, 0);
   }
-
   csv_params->curr_field_idx++;
 }
 
@@ -255,6 +258,8 @@ void csv_setup_reader(reader_t *const reader) {
   csv_params->obj_id_field_idx = init_params->obj_id_field;
   csv_params->obj_size_field_idx = init_params->obj_size_field;
   csv_params->cnt_field_idx = init_params->cnt_field;
+  csv_parants->read_gen_idx = init_params->read_gen_field;
+  csv_parants->parent_addr_idx = init_params->parent_addr_field;
   csv_params->csv_parser =
       (struct csv_parser *)malloc(sizeof(struct csv_parser));
 

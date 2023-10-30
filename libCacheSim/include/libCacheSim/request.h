@@ -28,7 +28,12 @@ typedef struct request {
 
   uint64_t n_req;
   int64_t next_access_vtime;
-  /* carry necessary data between the multiple functions of serving one request
+
+    /* For WiredTiger algorithm */
+    int32_t read_gen;
+    int32_t parent_addr;
+
+    /* carry necessary data between the multiple functions of serving one request
    */
   void *eviction_algo_data;
 

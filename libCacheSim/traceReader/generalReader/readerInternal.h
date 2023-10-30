@@ -28,6 +28,8 @@ typedef struct {
   int op_field_idx;
   int cnt_field_idx;
   int ttl_field_idx;
+    int read_gen_idx;
+    int parent_addr_idx;
   bool has_header;
   unsigned char delimiter;
 
