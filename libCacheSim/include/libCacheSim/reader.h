@@ -148,8 +148,8 @@ static inline void set_default_reader_init_params(reader_init_param_t *params) {
   params->ttl_field = 0;
   params->next_access_vtime_field = 0;
 
-  params->read_gen = 0;
-  params->parent_addr = 0;
+  params->read_gen_field = 0;
+  params->parent_addr_field = 0;
 
   params->has_header = false;
   /* whether the user has specified the has_header params */

@@ -38,7 +38,8 @@ typedef struct {
 } Clock_params_t;
 
 typedef struct {
-    //TODO
+    cache_obj_t *q_head;
+    cache_obj_t *q_tail;
     uint32_t global_read_generation;
 } WT_params_t;
 
