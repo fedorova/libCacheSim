@@ -19,54 +19,54 @@ extern "C" {
 
 /* need to optimize this for CPU cacheline */
 typedef struct request {
-  int64_t clock_time; /* use uint64_t because vscsi uses microsec timestamp */
-  uint64_t hv;       /* hash value, used when offloading hash to reader */
-  obj_id_t obj_id;
-  int64_t obj_size;
-  int32_t ttl;
-  req_op_e op;
+    int64_t clock_time; /* use uint64_t because vscsi uses microsec timestamp */
+    uint64_t hv;       /* hash value, used when offloading hash to reader */
+    obj_id_t obj_id;
+    int64_t obj_size;
+    int32_t ttl;
+    req_op_e op;
 
-  uint64_t n_req;
-  int64_t next_access_vtime;
+    uint64_t n_req;
+    int64_t next_access_vtime;
 
     /* For WiredTiger algorithm */
     int32_t read_gen;
     int32_t parent_addr;
+    int32_t page_type;
 
     /* carry necessary data between the multiple functions of serving one request
    */
-  void *eviction_algo_data;
+    void *eviction_algo_data;
 
-  struct {
-    uint64_t key_size : 16;
-    uint64_t val_size : 48;
-  };
+    struct {
+        uint64_t key_size : 16;
+        uint64_t val_size : 48;
+    };
 
-  int32_t ns;  // namespace
-  int32_t content_type;
-  int32_t tenant_id;
+    int32_t ns;  // namespace
+    int32_t content_type;
+    int32_t tenant_id;
+    int32_t bucket_id;
+    int32_t age;
+    int32_t hostname;
+    int16_t extension;
+    int16_t colo;
+    int16_t n_level;
+    int16_t n_param;
+    int8_t method;
 
-  int32_t bucket_id;
-  int32_t age;
-  int32_t hostname;
-  int16_t extension;
-  int16_t colo;
-  int16_t n_level;
-  int16_t n_param;
-  int8_t method;
+    /* used in trace analysis */
+    int64_t vtime_since_last_access;
+    int64_t rtime_since_last_access;
+    int64_t prev_size;     /* prev size */
+    int32_t create_rtime;
+    bool compulsory_miss;   /* use this field only when it is set */
+    bool overwrite;  // this request overwrites a previous object
+    bool first_seen_in_window; /* the first time see in the time window */
+    /* used in trace analysis */
 
-  /* used in trace analysis */
-  int64_t vtime_since_last_access;
-  int64_t rtime_since_last_access;
-  int64_t prev_size;     /* prev size */
-  int32_t create_rtime;
-  bool compulsory_miss;   /* use this field only when it is set */
-  bool overwrite;  // this request overwrites a previous object
-  bool first_seen_in_window; /* the first time see in the time window */
-  /* used in trace analysis */
-
-  bool valid; /* indicate whether request is valid request
-               * it is invlalid if the trace reaches the end */
+    bool valid; /* indicate whether request is valid request
+                 * it is invlalid if the trace reaches the end */
 } request_t;
 
 /**

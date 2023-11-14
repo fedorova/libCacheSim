@@ -136,12 +136,16 @@ void parse_reader_params(const char *reader_params_str,
       params->next_access_vtime_field = (int)strtol(value, &end, 0);
       if (strlen(end) > 2)
         ERROR("param parsing error, find string \"%s\" after number\n", end);
-    }  else if (strcasecmp(key, "read-gen") == 0) {
+    }  else if (strcasecmp(key, "read-gen-col") == 0) {
         params->read_gen_field = (int)strtol(value, &end, 0);
         if (strlen(end) > 2)
             ERROR("param parsing error, find string \"%s\" after number\n", end);
-    } else if (strcasecmp(key, "parent-addr") == 0) {
+    } else if (strcasecmp(key, "parent-addr-col") == 0) {
         params->parent_addr_field = (int)strtol(value, &end, 0);
+        if (strlen(end) > 2)
+            ERROR("param parsing error, find string \"%s\" after number\n", end);
+    }  else if (strcasecmp(key, "obj-type-col") == 0) {
+        params->obj_type_field = (int)strtol(value, &end, 0);
         if (strlen(end) > 2)
             ERROR("param parsing error, find string \"%s\" after number\n", end);
     } else if (strcasecmp(key, "obj-id-is-num") == 0) {

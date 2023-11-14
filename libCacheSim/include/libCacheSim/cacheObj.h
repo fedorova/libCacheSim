@@ -135,9 +135,10 @@ typedef struct {
 } __attribute__((packed)) myclock_obj_params_t;
 
 typedef struct {
-    int64_t last_access_vtime;
-    int64_t read_generation;
+    int64_t last_access_time;
+    int64_t read_gen;
     int32_t page_type;
+    int32_t parent_addr;
 } WT_obj_metadata_t;
 
 

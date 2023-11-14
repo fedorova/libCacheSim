@@ -19,17 +19,18 @@ bool is_str_num(const char *str);
 typedef struct {
   struct csv_parser *csv_parser;
 
-  /* used in cb1, each time a field is read, curr_field_idx incr */
-  int curr_field_idx;
+    /* used in cb1, each time a field is read, curr_field_idx incr */
+    int curr_field_idx;
 
-  int time_field_idx;
-  int obj_id_field_idx;
-  int obj_size_field_idx;
-  int op_field_idx;
-  int cnt_field_idx;
-  int ttl_field_idx;
+    int time_field_idx;
+    int obj_id_field_idx;
+    int obj_size_field_idx;
+    int op_field_idx;
+    int cnt_field_idx;
+    int ttl_field_idx;
     int read_gen_idx;     /* WiredTiger cache */
     int parent_addr_idx;  /* WiredTiger cache */
+    int obj_type_idx;     /* WiredTiger cache */
   bool has_header;
   unsigned char delimiter;
 

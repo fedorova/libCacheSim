@@ -82,8 +82,10 @@ static void WT_free(cache_t *cache) { cache_struct_free(cache); }
  * @param req
  * @return true if cache hit, false if cache miss
  */
-static bool WT_get(cache_t *cache, const request_t *req) {
-  return cache_get_base(cache, req);
+static bool WT_get(cache_t *cache, const request_t *req)
+{
+    printf("cache_get_base: \n");
+    return cache_get_base(cache, req);
 }
 
 // ***********************************************************************
@@ -104,17 +106,20 @@ static bool WT_get(cache_t *cache, const request_t *req) {
  */
 static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
                              const bool update_cache) {
-  WT_params_t *params = (WT_params_t *)cache->eviction_params;
-  cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
 
-  if (cache_obj && likely(update_cache)) {
-    /* lru_head is the newest, move cur obj to lru_head */
+    printf("WT_find. addr = %d, parent_addr = %d, read_gen = %d, type = %d\n",
+           (int) req->obj_id, req->parent_addr, req->read_gen, req->page_type);
+    /*
+    if (cache_obj && likely(update_cache)) {
+        /* lru_head is the newest, move cur obj to lru_head
 #ifdef USE_BELADY
-    if (req->next_access_vtime != INT64_MAX)
+        if (req->next_access_vtime != INT64_MAX)
 #endif
-      move_obj_to_head(&params->q_head, &params->q_tail, cache_obj);
-  }
-  return cache_obj;
+            move_obj_to_head(&params->q_head, &params->q_tail, cache_obj);
+    }*/
+    return cache_obj;
 }
 
 /**

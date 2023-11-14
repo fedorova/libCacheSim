@@ -36,22 +36,23 @@ extern "C" {
 /* this provides the info about each field or col in csv and binary trace
  * the field index start with 1 */
 typedef struct {
-  bool ignore_obj_size;
-  bool ignore_size_zero_req;
-  bool obj_id_is_num;
-  int64_t cap_at_n_req;  // only process at most n_req requests
+    bool ignore_obj_size;
+    bool ignore_size_zero_req;
+    bool obj_id_is_num;
+    int64_t cap_at_n_req;  // only process at most n_req requests
 
-  int time_field;
-  int obj_id_field;
-  int obj_size_field;
-  int op_field;
-  int ttl_field;
-  int cnt_field;
-  int next_access_vtime_field;
+    int time_field;
+    int obj_id_field;
+    int obj_size_field;
+    int op_field;
+    int ttl_field;
+    int cnt_field;
+    int next_access_vtime_field;
 
     /* Additional fields for WiredTiger traces */
     int read_gen_field;
     int parent_addr_field;
+    int obj_type_field;
 
   // csv reader
   bool has_header;
@@ -150,6 +151,7 @@ static inline void set_default_reader_init_params(reader_init_param_t *params) {
 
   params->read_gen_field = 0;
   params->parent_addr_field = 0;
+  params->obj_type_field = 0;
 
   params->has_header = false;
   /* whether the user has specified the has_header params */
