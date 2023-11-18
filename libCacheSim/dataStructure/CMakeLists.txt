@@ -7,6 +7,7 @@ set(source
         hash/murmur3.c
         hashtable/chainedHashtable.c
         hashtable/chainedHashTableV2.c
+        map/map.cpp
         )
 add_library (dataStructure ${source})
 

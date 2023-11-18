@@ -1,0 +1,30 @@
+#ifndef MAP_HPP
+#define MAP_HPP
+
+#include <map>
+#include <string>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Define a handle for the C++ map to be used in C */
+typedef void* MapHandle;
+
+// Function to create a new map and return its handle
+MapHandle createMap();
+
+// Function to insert a key-value pair into the map
+void insertPair(MapHandle map, const char* key, int value);
+
+// Function to get the value associated with a key from the map
+int getValue(MapHandle map, const char* key);
+
+// Function to delete the map and free resources
+void deleteMap(MapHandle map);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // MAP_HPP

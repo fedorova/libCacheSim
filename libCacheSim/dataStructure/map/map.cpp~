@@ -1,0 +1,36 @@
+#include "map.hpp"
+
+typedef std::map<std::string, int> CppMap;
+
+extern "C" {
+
+MapHandle createMap() {
+    return new CppMap();
+}
+
+void insertPair(MapHandle map, const char* key, int value) {
+    if (map) {
+        CppMap* cppMap = static_cast<CppMap*>(map);
+        (*cppMap)[key] = value;
+    }
+}
+
+int getValue(MapHandle map, const char* key) {
+    if (map) {
+        CppMap* cppMap = static_cast<CppMap*>(map);
+        auto it = cppMap->find(key);
+        if (it != cppMap->end()) {
+            return it->second;
+        }
+    }
+    // Return a default value if key is not found
+    return -1;
+}
+
+void deleteMap(MapHandle map) {
+    if (map) {
+        delete static_cast<CppMap*>(map);
+    }
+}
+
+} // extern "C"
