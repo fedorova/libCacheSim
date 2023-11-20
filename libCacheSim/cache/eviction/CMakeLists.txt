@@ -37,10 +37,11 @@ set(sourceC
         other/S3LRU.c
 
         Sieve.c
+        WiredTiger.cpp
 )
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/priv")
-    set(sourceC ${sourceC} 
+    set(sourceC ${sourceC}
 
                 priv/MyClock.c
                 priv/QDLPv0.c
@@ -55,7 +56,7 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/priv")
 endif()
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fifo")
-        set(sourceC ${sourceC} 
+        set(sourceC ${sourceC}
         fifo/LP_SFIFO.c
         fifo/LP_TwoQ.c
         fifo/LP_ARC.c
@@ -73,7 +74,6 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/belady")
 endif()
 
 set(sourceCPP
-        WiredTiger.cpp
         cpp/LFU.cpp
         cpp/GDSF.cpp
         LHD/lhd.cpp
@@ -120,7 +120,6 @@ set_target_properties(evictionCPP
 #         )
 
 
-        
 # add_library(eviction INTERFACE)
 # target_link_libraries(eviction INTERFACE ${evictionLib})
 

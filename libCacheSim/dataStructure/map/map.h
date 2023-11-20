@@ -1,10 +1,6 @@
 #ifndef MAP_HPP
 #define MAP_HPP
 
-#include <cstdint>
-#include <map>
-#include <string>
-
 #ifdef __cplusplus
 extern "C" {
 #endif

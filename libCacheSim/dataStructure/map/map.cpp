@@ -1,4 +1,8 @@
-#include "map.hpp"
+#include <cstdint>
+#include <map>
+#include <string>
+
+#include "map.h"
 
 typedef std::map<std::uint64_t, void*> CppMap;
 

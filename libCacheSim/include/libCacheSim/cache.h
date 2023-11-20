@@ -18,6 +18,7 @@
 #include "logging.h"
 #include "macro.h"
 #include "request.h"
+#include "../../dataStructure/map/map.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -91,83 +92,89 @@ typedef struct {
 
 struct hashtable;
 struct cache {
-  struct hashtable *hashtable;
+    struct hashtable *hashtable;
 
-  cache_init_func_ptr cache_init;
-  cache_free_func_ptr cache_free;
-  cache_get_func_ptr get;
+    /*
+     * WiredTiger cache uses the map wrapper to
+     * reconstruct the BTree internally.
+     */
+    Map BTree;
 
-  cache_find_func_ptr find;
-  cache_can_insert_func_ptr can_insert;
-  cache_insert_func_ptr insert;
-  cache_need_eviction_func_ptr need_eviction;
-  cache_evict_func_ptr evict;
-  cache_remove_func_ptr remove;
-  cache_to_evict_func_ptr to_evict;
-  cache_get_occupied_byte_func_ptr get_occupied_byte;
-  cache_get_n_obj_func_ptr get_n_obj;
-  cache_print_cache_func_ptr print_cache;
+    cache_init_func_ptr cache_init;
+    cache_free_func_ptr cache_free;
+    cache_get_func_ptr get;
 
-  admissioner_t *admissioner;
+    cache_find_func_ptr find;
+    cache_can_insert_func_ptr can_insert;
+    cache_insert_func_ptr insert;
+    cache_need_eviction_func_ptr need_eviction;
+    cache_evict_func_ptr evict;
+    cache_remove_func_ptr remove;
+    cache_to_evict_func_ptr to_evict;
+    cache_get_occupied_byte_func_ptr get_occupied_byte;
+    cache_get_n_obj_func_ptr get_n_obj;
+    cache_print_cache_func_ptr print_cache;
 
-  prefetcher_t *prefetcher;
+    admissioner_t *admissioner;
 
-  void *eviction_params;
+    prefetcher_t *prefetcher;
 
-  // other name: logical_time, virtual_time, reference_count
-  int64_t n_req; /* number of requests (used by some eviction algo) */
+    void *eviction_params;
 
-  /**************** private fields *****************/
-  // use cache->get_n_obj to obtain the number of objects in the cache
-  // do not use this variable directly
-  int64_t n_obj;
-  // use cache->get_occupied_byte to obtain the number of objects in the cache
-  // do not use this variable directly
-  int64_t occupied_byte;
-  /************ end of private fields *************/
+    // other name: logical_time, virtual_time, reference_count
+    int64_t n_req; /* number of requests (used by some eviction algo) */
 
-  // because some algorithms choose different candidates
-  // each time we want to evict, but we want to make sure
-  // that the object returned from to_evict will be evicted
-  // the next time evicion is called, so we record here
-  cache_obj_t *to_evict_candidate;
-  // we keep track when the candidate was generated, so that
-  // old candidate is not used
-  int64_t to_evict_candidate_gen_vtime;
+    /**************** private fields *****************/
+    // use cache->get_n_obj to obtain the number of objects in the cache
+    // do not use this variable directly
+    int64_t n_obj;
+    // use cache->get_occupied_byte to obtain the number of objects in the cache
+    // do not use this variable directly
+    int64_t occupied_byte;
+    /************ end of private fields *************/
 
-  // const
-  int64_t cache_size;
-  int64_t default_ttl;
-  int32_t obj_md_size;
+    // because some algorithms choose different candidates
+    // each time we want to evict, but we want to make sure
+    // that the object returned from to_evict will be evicted
+    // the next time evicion is called, so we record here
+    cache_obj_t *to_evict_candidate;
+    // we keep track when the candidate was generated, so that
+    // old candidate is not used
+    int64_t to_evict_candidate_gen_vtime;
 
-  /* cache stat is not updated automatically, it is popped up only in
-   * some situations */
-  // cache_stat_t stat;
-  char cache_name[CACHE_NAME_ARRAY_LEN];
-  char init_params[CACHE_INIT_PARAMS_LEN];
+    // const
+    int64_t cache_size;
+    int64_t default_ttl;
+    int32_t obj_md_size;
 
-  void *last_request_metadata;
+    /* cache stat is not updated automatically, it is popped up only in
+     * some situations */
+    // cache_stat_t stat;
+    char cache_name[CACHE_NAME_ARRAY_LEN];
+    char init_params[CACHE_INIT_PARAMS_LEN];
+
+    void *last_request_metadata;
 #if defined(TRACK_EVICTION_V_AGE)
-  bool track_eviction_age;
+    bool track_eviction_age;
 #endif
 #if defined(TRACK_DEMOTION)
-  bool track_demotion;
+    bool track_demotion;
 #endif
 
-  /* not used by most algorithms */
-  int32_t *future_stack_dist;
-  int64_t future_stack_dist_array_size;
+    /* not used by most algorithms */
+    int32_t *future_stack_dist;
+    int64_t future_stack_dist_array_size;
 
-  int64_t log_eviction_age_cnt[EVICTION_AGE_ARRAY_SZE];
+    int64_t log_eviction_age_cnt[EVICTION_AGE_ARRAY_SZE];
 };
 
 static inline common_cache_params_t default_common_cache_params(void) {
-  common_cache_params_t params;
-  params.cache_size = 1 * GiB;
-  params.default_ttl = 364 * 86400;
-  params.hashpower = 20;
-  params.consider_obj_metadata = false;
-  return params;
+    common_cache_params_t params;
+    params.cache_size = 1 * GiB;
+    params.default_ttl = 364 * 86400;
+    params.hashpower = 20;
+    params.consider_obj_metadata = false;
+    return params;
 }
 
 /**
