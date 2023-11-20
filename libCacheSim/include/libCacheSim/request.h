@@ -31,7 +31,7 @@ typedef struct request {
 
     /* For WiredTiger algorithm */
     int32_t read_gen;
-    int32_t parent_addr;
+    obj_id_t parent_addr;
     int32_t page_type;
 
     /* carry necessary data between the multiple functions of serving one request

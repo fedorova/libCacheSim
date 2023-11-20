@@ -98,7 +98,7 @@ struct cache {
      * WiredTiger cache uses the map wrapper to
      * reconstruct the BTree internally.
      */
-    Map BTree;
+    node_t BTree_root;
 
     cache_init_func_ptr cache_init;
     cache_free_func_ptr cache_free;

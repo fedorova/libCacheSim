@@ -44,14 +44,13 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     cache->get_n_obj = cache_get_n_obj_default;
     cache->print_cache = WT_print_cache;
 
-    if ((cache->BTree = createMap()) == NULL)
-        return NULL;
-
     if (ccache_params.consider_obj_metadata) {
         cache->obj_md_size = 8 * 2;
     } else {
         cache->obj_md_size = 0;
     }
+
+    memset(&cache->BTree_root, 0, sizeof(node_t));
 
     WT_params_t *params = (WT_params_t *)malloc(sizeof(WT_params_t));
     params->q_head = NULL;
@@ -116,17 +115,14 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
                              const bool update_cache) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
+    node_t *parent_node = NULL;
 
-    printf("WT_find. addr = %d, parent_addr = %d, read_gen = %d, type = %d\n",
+    printf("WT_find. addr = %ld, parent_addr = %d, read_gen = %d, type = %d\n",
            (int) req->obj_id, req->parent_addr, req->read_gen, req->page_type);
-    /*
-    if (cache_obj && likely(update_cache)) {
-        /* lru_head is the newest, move cur obj to lru_head
-#ifdef USE_BELADY
-        if (req->next_access_vtime != INT64_MAX)
-#endif
-            move_obj_to_head(&params->q_head, &params->q_tail, cache_obj);
-    }*/
+
+    if (!cache_obj.in_tree)
+        printf("Warning: WiredTiger cache object not in tree\n");
+
     return cache_obj;
 }
 
@@ -141,12 +137,64 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
  * @return the inserted object
  */
 static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
-  WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    node_t *new_node;
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
-  cache_obj_t *obj = cache_insert_base(cache, req);
-  prepend_obj_to_head(&params->q_head, &params->q_tail, obj);
+    cache_obj_t *obj = cache_insert_base(cache, req);
+    prepend_obj_to_head(&params->q_head, &params->q_tail, obj);
 
-  return obj;
+     /*
+     * B-Tree is not initialized. If we are processing the first record in the
+     * trace, we expect that record to identify the root node. If we see the
+     * record that does not identify the root note and the BTree is not initialized,
+     * this is an error.
+     */
+    if (cache->BTree_root.children == NULL) {
+        if (req->parent_addr == 0) {
+            if ((cache->BTree_root.children = map_create()) == NULL) {
+                printf("Could not allocate memory upon BTree initialization\n");
+                return NULL;
+            }
+            BTree_root.cache_obj = obj;
+            cache_obj->wt_page.in_tree = true;
+            cache_obj->wt_page.type = WT_ROOT;
+            return obj;
+        } else {
+            printf("Error: WiredTiger BTree has not been initialized\n");
+                return NULL;
+        }
+    }
+
+    if (obj->wt_page.in_tree) {
+        printf("Error: new WiredTiger object already in tree\n");
+        return NULL;
+    }
+
+    DEBUG_ASSERT(req->parent_addr != 0);
+    /* The object is not root and is not in tree. Insert it under its parent. */
+    parent_node = btree_find_parent(&cache->BTree_root, req->parent_addr);
+    if (parent_node == NULL) {
+        printf("Warning: parent of object %ld not found in WiredTiger tree\n",
+               cache_obj->obj_id);
+        return NULL;
+    } else {
+        if ((new_node = (node_t *)malloc(sizeof(node_t))) == NULL) {
+            printf("Warning: could not allocate memory for a new WiredTiger node\n");
+            return NULL;
+        }
+        if ((new_node->children = map_create()) == NULL) {
+            printf("Warning: could not allocate memory for a new WiredTiger children map\n");
+            return NULL;
+        }
+        if (insertPair(parent_node->children, cache_obj->obj_id, new_node) != 0) {
+            printf("Warning, WiredTiger: could not insert a child into the parent's map\n");
+            return NULL;
+        }
+        obj->wt_page.in_tree = true;
+        obj->wt_page.parent_addr = parent_node->cache_obj->obj_id;
+        new_node->cache_obj = obj;
+    }
+    return obj;
 }
 
 /**
