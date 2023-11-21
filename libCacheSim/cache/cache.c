@@ -76,8 +76,6 @@ void cache_struct_free(cache_t *cache) {
         cache->admissioner->free(cache->admissioner);
     if (cache->prefetcher != NULL)
         cache->prefetcher->free(cache->prefetcher);
-    if (cache->BTree != NULL)
-        deleteMap(cache->BTree);
     my_free(sizeof(cache_t), cache);
 }
 

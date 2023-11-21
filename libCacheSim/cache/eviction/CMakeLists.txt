@@ -37,7 +37,7 @@ set(sourceC
         other/S3LRU.c
 
         Sieve.c
-        WiredTiger.cpp
+        WiredTiger.c
 )
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/priv")
@@ -66,7 +66,7 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fifo")
 endif()
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/belady")
-        set(sourceC ${sourceC} 
+        set(sourceC ${sourceC}
         belady/Sieve_Belady.c
         belady/LRU_Belady.c
         belady/FIFO_Belady.c

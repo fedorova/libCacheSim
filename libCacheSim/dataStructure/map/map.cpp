@@ -36,6 +36,40 @@ getValue(Map map, uint64_t key)
     return NULL;
 }
 
+size_t
+getMapSize(Map map) {
+    if (map) {
+        CppMap* cppMap = static_cast<CppMap*>(map);
+        return cppMap->size();
+    }
+    return 0;
+}
+
+const uint64_t
+getKeyAtIndex(Map map, size_t index)
+{
+    if (map) {
+        CppMap* cppMap = static_cast<CppMap*>(map);
+        auto it = cppMap->begin();
+        std::advance(it, index);
+        return it->first;
+    }
+    return 0;
+}
+
+void*
+getValueAtIndex(Map map, size_t index)
+{
+    if (map) {
+        CppMap* cppMap = static_cast<CppMap*>(map);
+        auto it = cppMap->begin();
+        std::advance(it, index);
+        return it->second;
+    }
+    /* Return a default value if the index is out of bounds */
+    return NULL;
+}
+
 int
 removePair(Map map, uint64_t key)
 {
@@ -52,4 +86,4 @@ void deleteMap(Map map)
         delete static_cast<CppMap*>(map);
 }
 
-} // extern "C"
+} /* extern "C" */

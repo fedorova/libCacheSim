@@ -94,12 +94,6 @@ struct hashtable;
 struct cache {
     struct hashtable *hashtable;
 
-    /*
-     * WiredTiger cache uses the map wrapper to
-     * reconstruct the BTree internally.
-     */
-    node_t BTree_root;
-
     cache_init_func_ptr cache_init;
     cache_free_func_ptr cache_free;
     cache_get_func_ptr get;

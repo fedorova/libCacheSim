@@ -1,5 +1,5 @@
-#ifndef MAP_HPP
-#define MAP_HPP
+#ifndef MAP_H
+#define MAP_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +20,15 @@ int insertPair(Map map, uint64_t key, void* value);
 /* Get the value associated with a key from the map */
 void * getValue(Map map, uint64_t);
 
+/* Get the map size */
+size_t getMapSize(Map map);
+
+/* Get the key at a given index */
+const uint64_t getKeyAtIndex(Map map, size_t index);
+
+/* Get the value at a given index */
+void* getValueAtIndex(Map map, size_t index);
+
 /* Remove the pair from the map */
 int removePair(Map map, uint64_t key);
 
@@ -30,4 +39,4 @@ void deleteMap(Map map);
 }
 #endif
 
-#endif // MAP_HPP
+#endif /* MAP_H */

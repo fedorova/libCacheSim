@@ -1,4 +1,7 @@
+#pragma once
+
 #include "../../dataStructure/map/map.h"
+#include "../../include/libCacheSim/cache.h"
 
 /* WiredTiger page types */
 #define WT_ROOT -1
