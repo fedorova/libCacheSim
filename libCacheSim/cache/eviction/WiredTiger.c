@@ -251,14 +251,12 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
  * @param req not used
  */
 static void WT_evict(cache_t *cache, const request_t *req) {
-
-    printf("WT_evict: \n");
-    __btree_print(cache);
-    return; /* XXX - re-enable once we correctly update the tree. */
-#if 0
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *obj_to_evict = params->q_tail;
     DEBUG_ASSERT(params->q_tail != NULL);
+
+    printf("WT_evict: \n");
+
 
     // we can simply call remove_obj_from_list here, but for the best performance,
     // we chose to do it manually
@@ -279,8 +277,9 @@ static void WT_evict(cache_t *cache, const request_t *req) {
                obj_to_evict->misc.next_access_vtime);
 #endif
 
+    
     cache_evict_base(cache, obj_to_evict, true);
-#endif
+    __btree_print(cache);
 }
 
 /**
@@ -297,15 +296,16 @@ static void WT_evict(cache_t *cache, const request_t *req) {
  *
  * @param cache
  * @param obj
- */
+ *
 static void WT_remove_obj(cache_t *cache, cache_obj_t *obj) {
   assert(obj != NULL);
 
   WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
+  printf("WT_remove_obj: \n");
   remove_obj_from_list(&params->q_head, &params->q_tail, obj);
   cache_remove_obj_base(cache, obj, true);
-}
+  }*/
 
 /**
  * @brief remove an object from the cache
@@ -326,6 +326,7 @@ static bool WT_remove(cache_t *cache, const obj_id_t obj_id) {
     return false;
   }
   WT_params_t *params = (WT_params_t *)cache->eviction_params;
+  printf("WT_remove: \n");
 
   remove_obj_from_list(&params->q_head, &params->q_tail, obj);
   cache_remove_obj_base(cache, obj, true);
@@ -348,9 +349,7 @@ static void WT_print_cache(const cache_t *cache) {
     printf("END\n");
 }
 
-
 static node_t *__btree_find_parent(node_t *start, obj_id_t parent_id) {
-
     Map children;
     node_t *found_node, *child_node;
     size_t i;
