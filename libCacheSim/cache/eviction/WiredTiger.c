@@ -23,6 +23,7 @@ static bool WT_remove(cache_t *cache, const obj_id_t obj_id);
 static void WT_print_cache(const cache_t *cache);
 
 static node_t *__btree_find_parent(node_t *start, obj_id_t obj_id);
+static void __btree_print(cache_t *cache);
 
 /**
  * @brief initialize a WiredTiger cache
@@ -92,7 +93,7 @@ static void WT_free(cache_t *cache)
  */
 static bool WT_get(cache_t *cache, const request_t *req)
 {
-    printf("cache_get_base: \n");
+    printf("WT_get: \n");
     return cache_get_base(cache, req);
 }
 
@@ -123,6 +124,8 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
 
     if (cache_obj != NULL && !cache_obj->wt_page.in_tree)
         printf("Warning: WiredTiger cache object not in tree\n");
+
+    __btree_print(cache);
 
     return cache_obj;
 }
@@ -232,6 +235,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
 static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
   WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
+  printf("WT_to_evict: \n");
   DEBUG_ASSERT(params->q_tail != NULL || cache->occupied_byte == 0);
 
   cache->to_evict_candidate_gen_vtime = cache->n_req;
@@ -248,7 +252,9 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
  */
 static void WT_evict(cache_t *cache, const request_t *req) {
 
-    return;
+    printf("WT_evict: \n");
+    __btree_print(cache);
+    return; /* XXX - re-enable once we correctly update the tree. */
 #if 0
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *obj_to_evict = params->q_tail;
@@ -347,7 +353,7 @@ static node_t *__btree_find_parent(node_t *start, obj_id_t parent_id) {
 
     Map children;
     node_t *found_node, *child_node;
-    size_t i, map_size;
+    size_t i;
 
     if (parent_id == start->cache_obj->obj_id)
         return start;
@@ -363,6 +369,52 @@ static node_t *__btree_find_parent(node_t *start, obj_id_t parent_id) {
             return found_node;
     }
     return NULL;
+}
+
+static inline void
+__btree_print_node_nochildren(node_t *node)
+{
+
+    printf("%lu %d [%lu]", node->cache_obj->obj_id, node->cache_obj->wt_page.page_type,
+           node->cache_obj->wt_page.parent_addr);
+}
+
+static void
+__btree_print_node(node_t *node, int times)
+{
+    int k;
+    node_t *child_node;
+    size_t i;
+
+    DEBUG_ASSERT(node != NULL);
+
+    __btree_print_node_nochildren(node);
+
+    if (node->cache_obj->wt_page.page_type != WT_LEAF) {
+        for (i = 0; i < getMapSize(node->children); i++) {
+            child_node = getValueAtIndex(node->children, i);
+            DEBUG_ASSERT(child_node != NULL);
+            printf("\n");
+            for (k = 0; k < times; k++) printf("  ");
+            __btree_print_node(child_node, times + 1);
+        }
+    }
+}
+
+static void __btree_print(cache_t *cache)
+{
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+    printf("BEGIN ----------------------------------------\n");
+
+    if (params->BTree_root.children == NULL) {
+        printf("Root: NULL\n");
+        return;
+    }
+    else
+        __btree_print_node(&params->BTree_root, 0);
+
+    printf("\nEND ----------------------------------------\n");
 }
 
 #ifdef __cplusplus

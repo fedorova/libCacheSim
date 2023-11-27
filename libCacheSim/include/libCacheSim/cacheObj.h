@@ -137,8 +137,8 @@ typedef struct {
 typedef struct {
     int64_t last_access_time;
     int64_t read_gen;
-    int32_t page_type;
-    int32_t parent_addr;
+    int8_t page_type;
+    int64_t parent_addr;
     bool in_tree;
 } WT_obj_metadata_t;
 
