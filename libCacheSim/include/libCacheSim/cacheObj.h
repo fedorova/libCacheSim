@@ -11,10 +11,13 @@
 
 #include "../config.h"
 #include "mem.h"
+#include "../../dataStructure/map/map.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+struct cache_obj;
 
 // ############## per object metadata used in eviction algorithm cache obj
 typedef struct {
@@ -138,13 +141,13 @@ typedef struct {
     int64_t last_access_time;
     int64_t read_gen;
     int8_t page_type;
-    int64_t parent_addr;
     bool in_tree;
-} WT_obj_metadata_t;
+    Map children;
+    struct cache_obj *parent_page;
+} wt_page_t;
 
 
 // ############################## cache obj ###################################
-struct cache_obj;
 typedef struct cache_obj {
     struct cache_obj *hash_next;
     obj_id_t obj_id;
@@ -184,7 +187,7 @@ typedef struct cache_obj {
         S3FIFO_obj_metadata_t S3FIFO;
         myclock_obj_params_t myclock;
         Sieve_obj_params_t sieve;
-        WT_obj_metadata_t wt_page;         // for WiredTiger
+        wt_page_t wt_page;         // for WiredTiger
 
 #if defined(ENABLE_GLCACHE) && ENABLE_GLCACHE == 1
     GLCache_obj_metadata_t GLCache;

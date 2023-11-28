@@ -1,7 +1,6 @@
 #pragma once
 
 #include "cache.h"
-#include "../../cache/eviction/WiredTiger.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,7 +45,7 @@ typedef struct {
      * WiredTiger cache uses the map wrapper to
      * reconstruct the BTree internally.
      */
-    node_t BTree_root;
+    cache_obj_t *BTree_root;
 } WT_params_t;
 
 
