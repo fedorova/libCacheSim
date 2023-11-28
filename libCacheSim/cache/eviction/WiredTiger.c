@@ -28,8 +28,10 @@ static bool WT_remove(cache_t *cache, const obj_id_t obj_id);
 static void WT_print_cache(const cache_t *cache);
 
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
-static void __btree_print(cache_t *cache);
 static int __btree_init_page(cache_obj_t *obj, short page_type, cache_obj_t *parent_obj, int read_gen);
+static void __btree_print(cache_t *cache);
+static void __btree_remove(cache_t *cache, cache_obj_t *obj);
+
 /**
  * @brief initialize a WiredTiger cache
  *
@@ -150,7 +152,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
     obj = cache_insert_base(cache, req);
-    prepend_obj_to_head(&params->q_head, &params->q_tail, obj);
+
 
     INFO("WT_insert: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d\n",
            req->obj_id, req->parent_addr, req->read_gen, req->page_type);
@@ -172,6 +174,9 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
                 return NULL;
         }
     }
+
+    /* We don't do this for the root, because we never want to evict root */
+    prepend_obj_to_head(&params->q_head, &params->q_tail, obj);
 
     if (obj->wt_page.in_tree) {
         printf("Error: new WiredTiger object already in tree\n");
@@ -239,7 +244,6 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
     INFO("WT_evict: \n");
 
-#if 0
     params->q_tail = params->q_tail->queue.prev;
     if (likely(params->q_tail != NULL)) {
         params->q_tail->queue.next = NULL;
@@ -256,10 +260,8 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 #endif
 
     /* Remove object and its children from B-Tree */
-//    __btree_remove(params, obj_to_evict);
-    cache_evict_base(cache, obj_to_evict, true);
+    __btree_remove(cache, obj_to_evict);
     __btree_print(cache);
-#endif
 }
 
 /**
@@ -379,6 +381,31 @@ __btree_print(cache_t *cache){
     printf("\nEND ----------------------------------------\n");
 }
 
+/*
+ * Recursively remove the object's children from the B-Tree, and remove itself from its parent.
+ */
+static void
+__btree_remove(cache_t *cache, cache_obj_t *obj) {
+    int i;
+
+    DEBUG_ASSERT(obj != NULL);
+
+    if (obj->wt_page.page_type == WT_ROOT) {
+        ERROR("WiredTiger: not allowed to remove root\n");
+        return;
+    }
+    else if (obj->wt_page.page_type == WT_INTERNAL) {
+        for (i = 0; i < getMapSize(obj->wt_page.children); i++)
+            __btree_remove(cache, getValueAtIndex(obj->wt_page.children, i));
+        deleteMap(obj->wt_page.children);
+    }
+
+    DEBUG_ASSERT(removePair(obj->wt_page.parent_page->wt_page.children, obj->obj_id));
+    INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id, obj->wt_page.parent_page->obj_id,
+         obj->wt_page.parent_page->wt_page.children);
+
+    cache_evict_base(cache, obj, true);
+}
 #ifdef __cplusplus
 }
 #endif
