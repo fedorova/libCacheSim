@@ -13,6 +13,13 @@
 #define WT_INTERNAL 0
 #define WT_LEAF 1
 
+/* WiredTiger eviction constants */
+#define WT_CACHE_OVERHEAD_PCT 8 /* the default, can be changed via connection config */
+#define WT_EVICT_WALK_BASE 300
+#define WT_EVICT_WALK_INCR 100
+
+#define WT_EVICT_QUEUE_MAX 3
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,10 +34,13 @@ static void WT_evict(cache_t *cache, const request_t *req);
 static bool WT_remove(cache_t *cache, const obj_id_t obj_id);
 static void WT_print_cache(const cache_t *cache);
 
+static int __btree_evict_target();
+static cache_obj_t *__btree_evict_walk_next(cache_obj_t *start);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
-static int __btree_init_page(cache_obj_t *obj, short page_type, cache_obj_t *parent_obj, int read_gen);
+static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
 static void __btree_print(cache_t *cache);
 static void __btree_remove(cache_t *cache, cache_obj_t *obj);
+
 
 /**
  * @brief initialize a WiredTiger cache
@@ -64,6 +74,8 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     memset(params, 0, sizeof(WT_params_t));
     params->q_head = NULL;
     params->q_tail = NULL;
+    if ((params->evict_q = malloc(sizeof(cache_obj_t*) * (WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR)) == NULL)
+        return NULL;
     cache->eviction_params = params;
 
     return cache;
@@ -166,7 +178,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
          */
         if (req->parent_addr == 0) { /* Root is the only node with parent address zero. */
             params->BTree_root = obj;
-            if (__btree_init_page(obj, WT_ROOT, NULL /* parent page */, 0 /* read gen */) != 0)
+            if (__btree_init_page(obj, params, WT_ROOT, NULL /* parent page */, 0 /* read gen */) != 0)
                 return NULL;
             return obj;
         } else {
@@ -198,7 +210,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
     } else {
         DEBUG_ASSERT(parent_page->obj_id == req->parent_addr);
 
-        if (__btree_init_page(obj, req->page_type, parent_page, req->read_gen) != 0)
+        if (__btree_init_page(obj, params, req->page_type, parent_page, req->read_gen) != 0)
             return NULL;
         if (insertPair(parent_page->wt_page.children, obj->obj_id, (void*)obj) != 0) {
             ERROR("WiredTiger could not insert a child into the parent's map\n");
@@ -329,7 +341,7 @@ __btree_find_parent(cache_obj_t *start, obj_id_t parent_id) {
 }
 
 static int
-__btree_init_page(cache_obj_t *obj, short page_type, cache_obj_t *parent_page, int read_gen) {
+__btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type, cache_obj_t *parent_page, int read_gen) {
     obj->wt_page.page_type = page_type;
     obj->wt_page.parent_page = parent_page;
     obj->wt_page.read_gen = read_gen;
@@ -338,6 +350,13 @@ __btree_init_page(cache_obj_t *obj, short page_type, cache_obj_t *parent_page, i
     if (page_type != WT_LEAF)
         if ((obj->wt_page.children = createMap()) == NULL)
             return ENOMEM;
+
+    /*
+     * These are the same as long as we are supporting only a single B-Tree, but keep track of
+     * them separately in case we implement the multi-B-tree functionality.
+     */
+    cache_params->cache_inmem_bytes += obj->size;
+    cache_params->btree_inmem_bytes += obj->size;
     return 0;
 }
 
