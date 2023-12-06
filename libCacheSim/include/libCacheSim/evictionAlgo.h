@@ -47,7 +47,7 @@ typedef struct {
      */
     cache_obj_t *BTree_root;
     cache_obj_t *evict_q;
-    uint32_t evict_slot;
+    uint32_t evict_entries;
     uint32_t evict_max_slots;
     uint64_t cache_inmem_bytes;
     uint64_t btree_inmem_bytes;

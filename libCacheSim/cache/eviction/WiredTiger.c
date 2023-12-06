@@ -35,7 +35,8 @@ static bool WT_remove(cache_t *cache, const obj_id_t obj_id);
 static void WT_print_cache(const cache_t *cache);
 
 static int __btree_evict_target();
-static cache_obj_t *__btree_evict_walk_next(cache_obj_t *start);
+static int __btree_evict_walk(cache_t *cache);
+static cache_obj_t *__btree_evict_walk_trek(cache_obj_t *start);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
 static void __btree_print(cache_t *cache);
@@ -74,8 +75,10 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     memset(params, 0, sizeof(WT_params_t));
     params->q_head = NULL;
     params->q_tail = NULL;
-    if ((params->evict_q = malloc(sizeof(cache_obj_t*) * (WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR)) == NULL)
+    params->evict_slots = WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR;
+    if ((params->evict_q = malloc(sizeof(cache_obj_t*) * params->evict_slots) == NULL))
         return NULL;
+
     cache->eviction_params = params;
 
     return cache;
@@ -316,6 +319,39 @@ static void WT_print_cache(const cache_t *cache) {
         cur = cur->queue.next;
     }
     printf("END\n");
+}
+
+/*
+ * Wired Tiger's __evict_walk --
+ *     Fill in the array by walking the next set of pages.
+ *     In WiredTiger this function decides which tree should be walked.
+ *     At the moment we are only supporting a single B-Tree, so we
+ *     simply proceed with walking it.
+ */
+
+static int
+__btree_evict_walk(const cache_t *cache) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+    cache_obj_t *evict_q;
+    int slot, max_entries;
+
+    slot = params->evict_entries;
+    max_entries = WT_MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
+    __btree_evict_walk_tree(params->BTree_root, params->evict_q, max_entries, &slot);
+
+}
+
+/*
+ * WiredTiger's __evict_walk_tree --
+ *     Get a few page eviction candidates from a single underlying file.
+ */
+static int
+__btree_evict_walk_tree(cache_obj_t *BTree_root, cache_obj_t *evict_queue,
+                        u_int max_entries, u_int *slotp) {
+
+
+
 }
 
 static cache_obj_t *
