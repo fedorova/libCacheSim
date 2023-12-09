@@ -47,10 +47,12 @@ typedef struct {
      */
     cache_obj_t *BTree_root;
     cache_obj_t *evict_q;
-    uint32_t evict_entries;
-    uint32_t evict_max_slots;
-    uint64_t cache_inmem_bytes;
     uint64_t btree_inmem_bytes;
+    uint64_t cache_inmem_bytes;
+    uint32_t evict_entries;  /* first available evict slot */
+    uint32_t evict_slots;    /* total available evict slots */
+    uint32_t evict_walk_progress;
+    uint32_t evict_walk_target;
 } WT_params_t;
 
 

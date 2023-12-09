@@ -322,7 +322,7 @@ static void WT_print_cache(const cache_t *cache) {
 }
 
 /*
- * Wired Tiger's __evict_walk --
+ * WiredTiger's __evict_walk --
  *     Fill in the array by walking the next set of pages.
  *     In WiredTiger this function decides which tree should be walked.
  *     At the moment we are only supporting a single B-Tree, so we
@@ -330,15 +330,71 @@ static void WT_print_cache(const cache_t *cache) {
  */
 
 static int
-__btree_evict_walk(const cache_t *cache) {
+__btree_evict_walk(const cache_t *cache)
+{
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
-    cache_obj_t *evict_q;
     int slot, max_entries;
 
-    slot = params->evict_entries;
+    slot = params->evict_entries; /* first available evict entry */
     max_entries = WT_MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
-    __btree_evict_walk_tree(params->BTree_root, params->evict_q, max_entries, &slot);
+    __btree_evict_walk_tree(cache, max_entries, &slot);
+
+}
+
+static inline uint64_t
+__btree_bytes_evictable(WT_params_t *param)
+{
+    return (params->btree_inmem_bytes - params->BTree_root->obj_size)
+        * (100 + BTREE_OVERHEAD_PCT) / 100;
+}
+
+static inline uint64_t
+__btree_cache_bytes_inuse(WT_params_t *param)
+{
+    return params->cache_inmem_bytes * (100 + BTREE_OVERHEAD_PCT) / 100;
+}
+
+/*
+ * WiredTiger's __evict_walk_target --
+ *    We currently only support the use case of read-only tree and thus
+ *    only clean pages.
+ */
+static int
+__btree_evict_walk_target(const cache_t *cache)
+{
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    uint64_t btree_inuse, bytes_per_slot, cache_inuse;
+    uint32_t target_pages;
+
+    target_pages = 0;
+
+/*
+ * The minimum number of pages we should consider per tree.
+ */
+#define MIN_PAGES_PER_TREE 10
+
+    /*
+     * The target number of pages for this tree is proportional to the space it is taking up in
+     * cache. Round to the nearest number of slots so we assign all of the slots to a tree
+     * filling 99+% of the cache (and only have to walk it once).
+     */
+    btree_inuse = __btree_bytes_evictable(params);
+    cache_inuse = __btree_cache_bytes_inuse(params);
+    bytes_per_slot = 1 + cache_inuse / params->evict_slots;
+    target_pages = (uint32_t)((btree_inuse + bytes_per_slot / 2) / bytes_per_slot);
+
+    if (btree_inuse == 0)
+        return (0);
+
+    /*
+     * There is some cost associated with walking a tree. If we're going to visit this tree, always
+     * look for a minimum number of pages.
+     */
+    if (target_pages < MIN_PAGES_PER_TREE)
+        target_pages = MIN_PAGES_PER_TREE;
+
+    return (target_pages);
 
 }
 
@@ -347,9 +403,28 @@ __btree_evict_walk(const cache_t *cache) {
  *     Get a few page eviction candidates from a single underlying file.
  */
 static int
-__btree_evict_walk_tree(cache_obj_t *BTree_root, cache_obj_t *evict_queue,
-                        u_int max_entries, u_int *slotp) {
+__btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
+{
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    cache_obj_t *start, *evict_queue;
+    uint32_t target_pages, remaining_slots;
 
+    evict_queue = params->evict_queue;
+
+    /*
+     * Figure out how many slots to fill from this tree. Note that some care is taken in the
+     * calculation to avoid overflow.
+     */
+    start = evict_queue + *slotp;
+    remaining_slots = max_entries - *slotp;
+    if (params->evict_walk_progress >= params->evict_walk_target) {
+        params->evict_walk_target = __btree_evict_walk_target(cache);
+        params->evict_walk_progress = 0;
+    }
+    target_pages = params->evict_walk_target - params->evict_walk_progress;
+
+    if (target_pages > remaining_slots)
+        target_pages = remaining_slots;
 
 
 }
