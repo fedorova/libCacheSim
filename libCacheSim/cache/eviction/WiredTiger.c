@@ -18,7 +18,20 @@
 #define WT_EVICT_WALK_BASE 300
 #define WT_EVICT_WALK_INCR 100
 
+/* Maximum number of eviction queues */
 #define WT_EVICT_QUEUE_MAX 3
+
+typedef enum { /* Start position for eviction walk */
+    WT_EVICT_WALK_NEXT,
+    WT_EVICT_WALK_PREV,
+    WT_EVICT_WALK_RAND_NEXT,
+    WT_EVICT_WALK_RAND_PREV
+} WT_EVICT_WALK_TYPE;
+
+/* WiredTiger flags */
+#define WT_READ_PREV 1
+#define WT_RESTART   2
+#define WT_NOTFOUND  3
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +53,7 @@ static cache_obj_t *__btree_evict_walk_trek(cache_obj_t *start);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
 static void __btree_print(cache_t *cache);
+static int __btree_random_descent(cache_t *cache, cache_obj_t *evict_start);
 static void __btree_remove(cache_t *cache, cache_obj_t *obj);
 
 
@@ -80,6 +94,7 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
         return NULL;
 
     cache->eviction_params = params;
+    srand(time(NULL));
 
     return cache;
 }
@@ -394,6 +409,7 @@ __btree_evict_walk_target(const cache_t *cache)
     if (target_pages < MIN_PAGES_PER_TREE)
         target_pages = MIN_PAGES_PER_TREE;
 
+    printf("__btree_evict_walk_target: returning %d target pages\n", target_pages);
     return (target_pages);
 
 }
@@ -406,8 +422,8 @@ static int
 __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    cache_obj_t *start, *evict_queue;
-    uint32_t target_pages, remaining_slots;
+    cache_obj_t *start, *evict_queue, *save_obj;
+    uint32_t min_pages, target_pages, remaining_slots;
 
     evict_queue = params->evict_queue;
 
@@ -426,6 +442,30 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
     if (target_pages > remaining_slots)
         target_pages = remaining_slots;
 
+    min_pages = 10 * (uint64_t)target_pages;
+
+    /*
+     * Choose a random point in the tree if looking for candidates in a tree with no starting point
+     * set. This is mostly aimed at ensuring eviction fairly visits all pages in trees with a lot of
+     * in-cache content.
+     */
+    switch (params->evict_start_type) {
+    case WT_EVICT_WALK_NEXT:
+        break;
+    case WT_EVICT_WALK_PREV:
+        params->walk_flags = WT_READ_PREV;
+        break;
+    case WT_EVICT_WALK_RAND_PREV:
+        params->walk_flags = WT_READ_PREV;
+    /* FALLTHROUGH */
+    case WT_EVICT_WALK_RAND_NEXT:
+        if (params->evict_ref == NULL)
+            params->evict_ref = __btree_random_descent(cache);
+        break;
+    }
+    /* XXX Do we need to assign evict_ref above since we are setting it to NULL here? */
+    save_obj = params->evict_ref;
+    params->evict_ref = NULL;
 
 }
 
@@ -452,7 +492,8 @@ __btree_find_parent(cache_obj_t *start, obj_id_t parent_id) {
 }
 
 static int
-__btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type, cache_obj_t *parent_page, int read_gen) {
+__btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
+                  cache_obj_t *parent_page, int read_gen) {
     obj->wt_page.page_type = page_type;
     obj->wt_page.parent_page = parent_page;
     obj->wt_page.read_gen = read_gen;
@@ -509,6 +550,34 @@ __btree_print(cache_t *cache){
     printf("BEGIN ----------------------------------------\n");
     __btree_print_node(params->BTree_root, 0);
     printf("\nEND ----------------------------------------\n");
+}
+
+/*
+ * WiredTiger's __wt_random_descent --
+ *     Find a random page in a tree for eviction.
+ */
+static cache_obj_t
+__btree_random_descent(cache_t *cache)
+{
+    cache_obj_t *current_node;
+    Map children;
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    int children_size;
+
+    current_node = params->BTree_root;
+
+    for (;;) {
+        if (current_node->wt_page.page_type == WT_LEAF)
+            break;
+        children = current_node->wt_page.children;
+        children_size = getMapSize(children);
+        if (children_size != 0)
+            current_node = getValueAtIndex(children, rand() % children_size);
+        else break;
+    }
+    if (current != params->BTree_root)
+        return current;
+    return NULL;
 }
 
 /*

@@ -41,18 +41,17 @@ typedef struct {
     cache_obj_t *q_head;
     cache_obj_t *q_tail;
     uint32_t global_read_generation;
-    /*
-     * WiredTiger cache uses the map wrapper to
-     * reconstruct the BTree internally.
-     */
-    cache_obj_t *BTree_root;
     cache_obj_t *evict_q;
+    cache_obj_t *BTree_root;
+    cache_obj_t *evict_ref;
+    int evict_start_type;
     uint64_t btree_inmem_bytes;
     uint64_t cache_inmem_bytes;
     uint32_t evict_entries;  /* first available evict slot */
     uint32_t evict_slots;    /* total available evict slots */
     uint32_t evict_walk_progress;
     uint32_t evict_walk_target;
+    int walk_flags;
 } WT_params_t;
 
 
