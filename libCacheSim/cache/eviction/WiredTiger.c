@@ -33,6 +33,8 @@ typedef enum { /* Start position for eviction walk */
 #define WT_RESTART   2
 #define WT_NOTFOUND  3
 
+#define WT_READGEN_OLDEST 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -411,7 +413,75 @@ __btree_evict_walk_target(const cache_t *cache)
 
     printf("__btree_evict_walk_target: returning %d target pages\n", target_pages);
     return (target_pages);
+}
 
+/*
+ * WiredTiger's __tree_walk_internal --
+ *     Move to the next/previous page in the tree.
+ */
+static int
+ __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags)
+{
+    cache_obj_t node, *node_orig;
+    Map children = NULL;
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    int slot;
+
+    node_orig = *node;
+    *node = NULL;
+
+    if ((node = node_orig) == NULL) {
+        node = params->BTree_root;
+        children = node->wt_page.children;
+        if (getMapSize(children) == 0)
+            return 0;
+        else if (walk_flags == WT_READ_PREV)
+            slot = getMapSize(children) - 1;
+        else
+            slot = 0;
+        goto descend;
+    }
+
+    if (node->wt_page.page_type == WT_ROOT)
+        return 0;
+
+    /*  if (getMapSize(children) == 0) { Mark internal pages with no children.
+    /*             node->wt_page->read_gen = WT_READGEN_OLDEST; */
+
+    for (;;) {
+        if (getMapSize(node->wt_page.children) == 0 ||
+            (flags == WT_READ_PREV && slot == 0) || (flags != WT_READ_PREV && slot == getMapSize(node->wt_page.children)-1) ) {
+            /* Ascend to the parent to continue traversal? */
+        }
+        if (flags == WT_READ_PREV)
+            slot--;
+        else
+            slot++;
+        *walkcntp++;
+
+        for (;;) {
+descend:
+            DEBUG_ASSERT(children != NULL); /* Make sure this is true if we ever get here from the loop */
+            node = getValueAtIndex(children, slot);
+            if (node->wt_page.page_type == WT_LEAF) {
+                *nodep = node;
+                DEBUG_ASSERT(node != node_orig);
+                return 0;
+            }
+            /* We have an internal page */
+            children = node->wt_page.children;
+            /* The internal page is empty */
+            if (getMapSize(children) == 0) {
+                node->wt_page->read_gen = WT_READGEN_OLDEST;
+                break; /* Here we need to ascend to the root to continue traversal */
+            }
+            if (walk_flags == WT_READ_PREV)
+                slot = getMapSize(children) - 1;
+            else
+                slot = 0;
+            continue; /* How do we make sure we don't overflow the slot? 
+        }
+    }
 }
 
 /*
@@ -422,10 +492,16 @@ static int
 __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    cache_obj_t *start, *evict_queue, *save_obj;
-    uint32_t min_pages, target_pages, remaining_slots;
+    cache_obj_t *evict, *end, *evict_queue, *last_parent, *ref, *start;
+    bool give_up;
+    int ret;
+    uint32_t min_pages, target_pages, remaining_slots, walk_flags;
+    uint64_t internal_pages_already_queued, internal_pages_queued, internal_pages_seen;
+    uint64_t min_pages, pages_already_queued, pages_seen, pages_queued, refs_walked;
 
     evict_queue = params->evict_queue;
+    give_up = false;
+    last_parent = NULL;
 
     /*
      * Figure out how many slots to fill from this tree. Note that some care is taken in the
@@ -442,7 +518,11 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
     if (target_pages > remaining_slots)
         target_pages = remaining_slots;
 
+    if (target_pages == 0)
+        return (0);
+
     min_pages = 10 * (uint64_t)target_pages;
+    end = start + target_pages;
 
     /*
      * Choose a random point in the tree if looking for candidates in a tree with no starting point
@@ -453,10 +533,10 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
     case WT_EVICT_WALK_NEXT:
         break;
     case WT_EVICT_WALK_PREV:
-        params->walk_flags = WT_READ_PREV;
+        walk_flags = WT_READ_PREV;
         break;
     case WT_EVICT_WALK_RAND_PREV:
-        params->walk_flags = WT_READ_PREV;
+        walk_flags = WT_READ_PREV;
     /* FALLTHROUGH */
     case WT_EVICT_WALK_RAND_NEXT:
         if (params->evict_ref == NULL)
@@ -464,8 +544,15 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
         break;
     }
     /* XXX Do we need to assign evict_ref above since we are setting it to NULL here? */
-    save_obj = params->evict_ref;
+    ref = params->evict_ref;
     params->evict_ref = NULL;
+
+    internal_pages_already_queued = internal_pages_queued = internal_pages_seen = 0;
+    for (evict = start, pages_already_queued = pages_queued = pages_seen = refs_walked = 0;
+         evict < end && ret == 0;
+         last_parent = ref == NULL ? NULL : ref->wt_page->parent_page,
+             ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags)) {
+    }
 
 }
 
@@ -555,6 +642,16 @@ __btree_print(cache_t *cache){
 /*
  * WiredTiger's __wt_random_descent --
  *     Find a random page in a tree for eviction.
+ *
+ * In WiredTiger during random descent during eviction, we may get back a leaf page or an internal page.
+ * An internal page would get returned either if it has no children or if we randomly selected a child that
+ * is not present in the cache or has been deleted.  See __wt_page_in_func and __wt_random_descent.
+ *
+ * In our simulation, we would never return an internal page that has:
+ * -- an uncached child, because uncached children are not part of our children map. Our code always selects
+ * among cached children, so we will always return a cached child if one is present.
+ * -- a deleted child. For the same reason as it wouldn't return the unached child and also for the reason that
+ * we are not supporting read/write workloads for now – because we don’t emulate the code path evicting dirty pages.
  */
 static cache_obj_t
 __btree_random_descent(cache_t *cache)
