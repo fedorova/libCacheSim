@@ -422,13 +422,13 @@ __btree_evict_walk_target(const cache_t *cache)
 static int
  __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags)
 {
-    cache_obj_t node, *node_orig;
+    cache_obj_t *node, *node_orig;
     Map children = NULL;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     int slot;
 
-    node_orig = *node;
-    *node = NULL;
+    node_orig = *nodep;
+    *nodep = NULL;
 
     if ((node = node_orig) == NULL) {
         node = params->BTree_root;
@@ -440,47 +440,32 @@ static int
         else
             slot = 0;
         goto descend;
-    }
-
-    if (node->wt_page.page_type == WT_ROOT)
+    } else if (node->wt_page.page_type == WT_ROOT)
         return 0;
 
-    /*  if (getMapSize(children) == 0) { Mark internal pages with no children.
-    /*             node->wt_page->read_gen = WT_READGEN_OLDEST; */
-
     for (;;) {
-        if (getMapSize(node->wt_page.children) == 0 ||
-            (flags == WT_READ_PREV && slot == 0) || (flags != WT_READ_PREV && slot == getMapSize(node->wt_page.children)-1) ) {
-            /* Ascend to the parent to continue traversal? */
-        }
-        if (flags == WT_READ_PREV)
-            slot--;
-        else
-            slot++;
         *walkcntp++;
-
-        for (;;) {
-descend:
-            DEBUG_ASSERT(children != NULL); /* Make sure this is true if we ever get here from the loop */
-            node = getValueAtIndex(children, slot);
-            if (node->wt_page.page_type == WT_LEAF) {
-                *nodep = node;
-                DEBUG_ASSERT(node != node_orig);
-                return 0;
-            }
-            /* We have an internal page */
-            children = node->wt_page.children;
-            /* The internal page is empty */
-            if (getMapSize(children) == 0) {
-                node->wt_page->read_gen = WT_READGEN_OLDEST;
-                break; /* Here we need to ascend to the root to continue traversal */
-            }
-            if (walk_flags == WT_READ_PREV)
-                slot = getMapSize(children) - 1;
-            else
-                slot = 0;
-            continue; /* How do we make sure we don't overflow the slot? 
+        DEBUG_ASSERT(children != NULL);
+        node = getValueAtIndex(children, slot);
+        if (node->wt_page.page_type == WT_LEAF) {
+            *nodep = node;
+            DEBUG_ASSERT(node != node_orig);
+            return 0;
         }
+        /* We have an internal page */
+        children = node->wt_page.children;
+        /* The internal page is empty */
+        if (getMapSize(children) == 0) {
+            /* This is an empty internal page. Prioritize for eviction and return. */
+            node->wt_page->read_gen = WT_READGEN_OLDEST;
+            *nodep = node;
+            return 0;
+        }
+        if (walk_flags == WT_READ_PREV)
+            slot = getMapSize(children) - 1;
+        else
+            slot = 0;
+        continue;
     }
 }
 
@@ -543,7 +528,8 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
             params->evict_ref = __btree_random_descent(cache);
         break;
     }
-    /* XXX Do we need to assign evict_ref above since we are setting it to NULL here? */
+
+    /* We save the last point where we walked the tree. */
     ref = params->evict_ref;
     params->evict_ref = NULL;
 
@@ -552,6 +538,152 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
          evict < end && ret == 0;
          last_parent = ref == NULL ? NULL : ref->wt_page->parent_page,
              ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags)) {
+        /*
+         * Below are a bunch of conditions deciding whether we should queue this page for
+         * eviction and whether we should keep walking the tree.
+         *
+         * The first condition, in addition to the logic below, also checks if we have
+         * __wt_cache_aggressive set and if the current B-Tree is a history store.
+         * TODO: check if we need to add those conditions.
+         */
+        give_up = pages_seen > min_pages &&
+          (pages_queued == 0 || (pages_seen / pages_queued) > (min_pages / target_pages));
+        if (give_up) {
+            switch (params->evict_start_type) {
+            case WT_EVICT_WALK_NEXT:
+                params->evict_start_type = WT_EVICT_WALK_PREV;
+                break;
+            case WT_EVICT_WALK_PREV:
+                params->evict_start_type = WT_EVICT_WALK_RAND_PREV;
+                break;
+            case WT_EVICT_WALK_RAND_PREV:
+                params->evict_start_type = WT_EVICT_WALK_RAND_NEXT;
+                break;
+            case WT_EVICT_WALK_RAND_NEXT:
+                params->evict_start_type = WT_EVICT_WALK_NEXT;
+                break;
+            }
+            /*
+             * We differentiate the reasons we gave up on this walk and increment the stats
+             * accordingly.
+             */
+            if (pages_queued == 0)
+                params->cache_eviction_walks_gave_up_no_targets++;
+            else
+                params->cache_eviction_walks_gave_up_ratio++;
+            break;
+        }
+        if (ref == NULL) {
+            params->cache_eviction_walks_ended;
+
+            if (++restarts == 2) {
+                params->cache_eviction_walks_stopped++;
+                break;
+            }
+            params->cache_eviction_walks_started++;
+            continue;
+        }
+
+        ++pages_seen;
+
+        if (ref->wt_page.page_type == WT_ROOT)
+            continue;
+
+        /*
+         * TODO: here the WiredTiger code checks if the page is modified. We are not
+         * doing this for now. Will need to change in the future.
+         */
+        node->wt_page.evict_pass_gen = params->evict_pass_gen;
+
+        if (node->wt_page.page_type == WT_INTERNAL)
+             internal_pages_seen++;
+
+        if (node->wt_page.page_evict == WT_PAGE_EVICT_LRU) {
+            pages_already_queued++;
+            if (node->wt_page.page_type == WT_INTERNAL)
+                internal_pages_already_queued++;
+            continue;
+        }
+
+         /*
+          * Here WiredTiger does the following check:
+          * Don't queue dirty pages in trees during checkpoints.
+          * TODO: We skip this check for now.
+          */
+        if (node->wt_page.read_gen == WT_READGEN_NOTSET)
+            node->wt_page.read_gen = WT_READGEN_NEW; /* XXX: Figure out how to set this */
+
+        /*
+         * Then in the original code we have the logic for pages being forcibly evicted,
+         * but it is only for pages marked as modified. Since we are not addressing
+         * workloads with modified pages for now, we skip this logic.
+         */
+
+        /*
+         * Next follows the logic prioritizing eviction of history store pages over other
+         * pages if history store dirty content is dominating the cache. We skip this for now.
+         * TODO: Enable later.
+         */
+
+        /*
+         * Next, WiredTiger does the following check:
+         * Pages that are empty or from dead trees are fast-tracked.
+         *
+         * TODO: Add dead tree checking when we get there.
+         *
+         * XXX: Figure out if an internal page is empty if it has no cached children,
+         * or if it must have no children at all to be considered empty.
+         * For now we can't have empty leaf pages, because we do not support workloads
+         * that delete data.
+         */
+
+        /*
+         * Next, WiredTiger does the check if this page is a metadata page not yet visible
+         * to all transactions. TODO: skip this for now.
+         */
+
+        /*
+         * Next, WiredTiger checks if we want this page based on flags set and the page
+         * properties. The flags have to do with pages being dirty. That is, the flags
+         * might instruct us to skip pages that are modified. We are not supporting
+         * workloads that dirty pages for now, so skip this check.
+         * TODO: add later.
+         */
+
+        /*
+         * Don't evict internal pages with children in cache
+         *
+         * Also skip internal page unless we get aggressive, the tree is idle (indicated by the
+         * tree being skipped for walks), or we are in eviction debug mode.
+         *
+         * TODO: We don't need eviction debug mode and we currently only support a single tree.
+         */
+        if (note->wt_page.page_type == WT_INTERNAL) {
+            if (getMapSize(node->children) > 0)
+                continue;
+            if (!params->evict_aggressive)
+                continue;
+        }
+
+        if (params->evict_aggressive)
+            goto fast;
+
+        /*
+         * Next, the WiredTiger code checks the transaction state of the page.
+         * TODO: Add that later.
+         */
+      fast: /* Do we jump here from more than one place? XXX: check. */
+        DEBUG_ASSERT(params->evict_ref == NULL);
+        if (!__evict_push_candidate(session, queue, evict, ref)) /* XXX */
+            continue;
+        ++evict;
+        ++pages_queued;
+        ++params->evict_walk_progress;
+
+        /* Count internal pages queued. */
+        if (ref->wt_page.page_type == WT_INTERNAL)
+            internal_pages_queued++;
+
     }
 
 }
