@@ -351,12 +351,36 @@ __btree_evict_walk(const cache_t *cache)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
-    int slot, max_entries;
+    u_int max_entries, retries, slot, start_slot;
+    u_int total_candidates;
 
-    slot = params->evict_entries; /* first available evict entry */
+    start_slot = slot = params->evict_entries; /* first available evict entry */
     max_entries = WT_MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
-    __btree_evict_walk_tree(cache, max_entries, &slot);
 
+  retry:
+    while (slot < max_entries)
+        __btree_evict_walk_tree(cache, max_entries, &slot);
+
+    /*
+     * Repeat the walks a few times if we don't find enough pages. Give up when we have some
+     * candidates and we aren't finding more.
+     */
+    if (slot < max_entries &&
+        (retries < 2 ||
+         (retries < WT_RETRY_MAX && (slot == params->evict_entries || slot > start_slot)))) {
+        start_slot = slot;
+        ++retries;
+        goto retry;
+    }
+
+    /*
+     * If we didn't find any entries on a walk when we weren't interrupted, let our caller know.
+     */
+    if (params->evict_entries == slot)
+        ret = -1;
+
+    params->evict_entries = slot;
+    return (ret);
 }
 
 static inline uint64_t
@@ -483,6 +507,7 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
     uint32_t min_pages, target_pages, remaining_slots, walk_flags;
     uint64_t internal_pages_already_queued, internal_pages_queued, internal_pages_seen;
     uint64_t min_pages, pages_already_queued, pages_seen, pages_queued, refs_walked;
+    bool give_up;
 
     evict_queue = params->evict_queue;
     give_up = false;
@@ -683,9 +708,59 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
         /* Count internal pages queued. */
         if (ref->wt_page.page_type == WT_INTERNAL)
             internal_pages_queued++;
-
     }
 
+    *slotp += (u_int)(evict - start);
+    params->cache_eviction_pages_queued += ((u_int)(evict - start));
+
+    /*
+     * If we couldn't find the number of pages we were looking for, skip the tree next time.
+     *
+     * At the time of the writing this is not relevant to us, because we are only supporting
+     * a single tree, so if we have to evict we must walk that tree.
+     *
+     * XXX -- not sure if I need to track the evict walk period given that we are supporting
+     * a single tree. Keep it for now.
+     */
+    if (pages_queued < target_pages / 2)
+        params->evict_walk_period = WT_MIN(WT_MAX(1, 2 * btree->evict_walk_period), 100);
+    else if (pages_queued == target_pages) {
+        params->evict_walk_period = 0;
+        /*
+         * WiredTiger code does this:
+         * If there's a chance the Btree was fully evicted, update the evicted flag in the handle.
+         * This isn't useful to us at the time of the writing, since we are only supporting a single
+         * B-Tree for now.
+         */
+    } else if (params->evict_walk_period > 0)
+        params->evict_walk_period /= 2;
+
+    /*
+     * Give up the walk occasionally.
+     *
+     * If we land on a page requiring forced eviction, or that isn't an ordinary in-memory page,
+     * move until we find an ordinary page: we should not prevent exclusive access to the page until
+     * the next walk. XXX -- does this apply to us?
+     */
+    if (ref != NULL) {
+        if (ref->wt_page.page_type == WT_ROOT || evict == start || give_up) {
+            if (restarts == 0)
+                params->cache_eviction_walks_abandoned++;
+            ref = NULL;
+        } else
+            while (ref != NULL && ref->wt_page->read_gen == WT_READGEN_OLDEST)
+                ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags);
+        btree->evict_ref = ref;
+    }
+
+    params->cache_eviction_walk += refs_walked;
+    params->cache_eviction_pages_seen += pages_seen;
+    params->cache_eviction_pages_already_queued += pages_already_queued;
+    params->cache_eviction_internal_pages_seen += internal_pages_seen;
+    params->cache_eviction_internal_pages_already_queued +=  internal_pages_already_queued;
+    params->cache_eviction_internal_pages_queued += internal_pages_queued;
+    params->cache_eviction_walk_passes++;
+    return (0);
 }
 
 static cache_obj_t *
