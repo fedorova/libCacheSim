@@ -18,7 +18,13 @@
 #define WT_EVICT_WALK_BASE 300
 #define WT_EVICT_WALK_INCR 100
 
-
+#define WT_READGEN_NOTSET 0
+#define WT_READGEN_OLDEST 1
+#define WT_READGEN_WONT_NEED 2
+#define WT_READGEN_EVICT_SOON(readgen) \
+    ((readgen) != WT_READGEN_NOTSET && (readgen) < WT_READGEN_START_VALUE)
+#define WT_READGEN_START_VALUE 100
+#define WT_READGEN_STEP 100
 
 typedef enum { /* Start position for eviction walk */
     WT_EVICT_WALK_NEXT,
@@ -48,17 +54,18 @@ static void WT_evict(cache_t *cache, const request_t *req);
 static bool WT_remove(cache_t *cache, const obj_id_t obj_id);
 static void WT_print_cache(const cache_t *cache);
 
+static int __btree_evict_lru_walk(cache_t *cache);
 static int __btree_evict_target();
 static int __btree_evict_walk(cache_t *cache);
-static int __btree_evict_lru_walk(cache_t *cache);
 static cache_obj_t *__btree_evict_walk_tree(cache_obj_t *start);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
+static char * __btree_page_tostring(ref)
 static void __btree_print(cache_t *cache);
 static int __btree_random_descent(cache_t *cache, cache_obj_t *evict_start);
 static void __btree_remove(cache_t *cache, cache_obj_t *obj);
 static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags);
-
+static void __evict_queue_sort(WT_evict_queue *queue, u_int size);
 
 /**
  * @brief initialize a WiredTiger cache
@@ -94,7 +101,7 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     for (int i = 0; i < WT_EVICT_QUEUE_MAX; i++) {
         if ((params->evict_queues[i].elements = malloc(sizeof(cache_obj_t*) * params->evict_slots) == NULL))
             return NULL;
-        params->evict_queues[i].last_used_slot = 0;
+        params->evict_queues[i].evict_entries = 0; /* First available slot for eviction candidates */
     }
 
     params->evict_current_queue = params->evict_fill_queue = params->evict_queues[0];
@@ -332,63 +339,20 @@ static bool WT_remove(cache_t *cache, const obj_id_t obj_id) {
 }
 
 static void WT_print_cache(const cache_t *cache) {
-    WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    cache_obj_t *cur = params->q_head;
-    /* print from the most recent to the least recent */
-    if (cur == NULL) {
-        printf("empty\n");
-        return;
-    }
-    while (cur != NULL) {
-        printf("%lu->", cur->obj_id);
-        cur = cur->queue.next;
-    }
-    printf("END\n");
+    __btree_print(cache);
 }
 
-/*
- * WiredTiger's __evict_walk --
- *     Fill in the array by walking the next set of pages.
- *     In WiredTiger this function decides which tree should be walked.
- *     At the moment we are only supporting a single B-Tree, so we
- *     simply proceed with walking it.
- */
-
-static int
-__btree_evict_walk(const cache_t *cache)
+static inline uint64_t
+__btree_bytes_evictable(WT_params_t *param)
 {
-    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    return (params->btree_inmem_bytes - params->BTree_root->obj_size)
+        * (100 + BTREE_OVERHEAD_PCT) / 100;
+}
 
-    u_int max_entries, retries, slot, start_slot;
-    u_int total_candidates;
-
-    start_slot = slot = params->evict_entries; /* first available evict entry */
-    max_entries = WT_MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
-
-  retry:
-    while (slot < max_entries)
-        __btree_evict_walk_tree(cache, max_entries, &slot);
-
-    /*
-     * Repeat the walks a few times if we don't find enough pages. Give up when we have some
-     * candidates and we aren't finding more.
-     */
-    if (slot < max_entries &&
-        (retries < 2 ||
-         (retries < WT_RETRY_MAX && (slot == params->evict_entries || slot > start_slot)))) {
-        start_slot = slot;
-        ++retries;
-        goto retry;
-    }
-
-    /*
-     * If we didn't find any entries on a walk when we weren't interrupted, let our caller know.
-     */
-    if (params->evict_entries == slot)
-        ret = -1;
-
-    params->evict_entries = slot;
-    return (ret);
+static inline uint64_t
+__btree_cache_bytes_inuse(WT_params_t *param)
+{
+    return params->cache_inmem_bytes * (100 + BTREE_OVERHEAD_PCT) / 100;
 }
 
 /*
@@ -400,6 +364,7 @@ __btree_evict_lru_walk(const cache_t *cache)
 {
     WT_evict_queue *queue, *other_queue;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    u_int entries;
 
     if (params->evict_empty_score > 0)
         params->evict_empty_score--;
@@ -413,15 +378,21 @@ __btree_evict_lru_walk(const cache_t *cache)
     other_queue = params->evict_q + (1 - (queue-params->evict_queues));
     params->evict_fill_queue = other_queue;
 
+    printf("evict_lru_walk will try the fill queue %p\n", queue);
+
     /* If this queue is full, try the other one. */
-    if (__evict_queue_full(queue) && !__evict_queue_full(other_queue))
+    if (__evict_queue_full(queue) && !__evict_queue_full(other_queue)) {
         queue = other_queue;
+        printf("evict_lru_walk: fill queue full, will use the other queue %p\n", queue);
+    }
 
     /*
      * If both queues are full and haven't been empty on recent refills, we're done.
      */
-    if (__evict_queue_full(queue) && params->evict_empty_score < WT_EVICT_SCORE_CUTOFF)
+    if (__evict_queue_full(queue) && params->evict_empty_score < WT_EVICT_SCORE_CUTOFF) {
+        printf("evict_lru_walk: both queues full. Bailing out.\n");
         return 0;
+    }
     /*
      * If the queue we are filling is empty, pages are being requested faster than they are being
      * queued.
@@ -440,20 +411,121 @@ __btree_evict_lru_walk(const cache_t *cache)
      * If the walk is interrupted, we still need to sort the queue: the next walk assumes there are
      * no entries beyond WT_EVICT_WALK_BASE.
      */
+    ret = __btree_evict_walk(cache, queue);
 
+    /*
+     * XXX -- figure out if we need to switch queues, since we are going single-threaded for now.
+     * We have locked the queue: in the (unusual) case where we are filling the current queue, mark
+     * it empty so that subsequent requests switch to the other queue.
+     */
+
+    /*
+     * Sort the evict queue and set the number of non-empty elements
+     */
+    __evict_queue_sort(queue->elements, params->evict_slots, &entries);
+    /*
+     * If we have more entries than the maximum tracked between walks, clear them. Do this before
+     * figuring out how many of the entries are candidates so we never end up with more candidates
+     * than entries.
+     */
+    while (entries > WT_EVICT_WALK_BASE)
+        queue->elements[--entries] = NULL;
+    queue->evict_entries = entries;
+
+    if (entries == 0) {
+        /*
+         * If there are no entries, there cannot be any candidates. Make we don't read past the end of the candidate list.
+         */
+        queue->evict_candidates = 0;
+        queue->evict_current = NULL;
+    }
+    if (params->evict_aggressive)
+        queue->evict_candidates = entries;
+    else {
+       /*
+         * Find the oldest read generation apart that we have in the queue, used to set the initial
+         * value for pages read into the system. The queue is sorted, find the first "normal"
+         * generation.
+         */
+        read_gen_oldest = WT_READGEN_START_VALUE;
+        for (candidates = 0; candidates < entries; ++candidates) {
+            read_gen_oldest = queue->elements[candidates]->wt_page.score;
+            if (!WT_READGEN_EVICT_SOON(read_gen_oldest))
+                break;
+        }
+
+        /*
+         * Take all candidates if we only gathered pages with an oldest
+         * read generation set.
+         *
+         * We normally never take more than 50% of the entries but if
+         * 50% of the entries were at the oldest read generation, take
+         * all of them.
+         */
+        if (WT_READGEN_EVICT_SOON(read_gen_oldest))
+            queue->evict_candidates = entries;
+        else if (candidates > entries / 2)
+            queue->evict_candidates = candidates;
+        else {
+            /*
+             * Take all of the urgent pages plus a third of ordinary candidates (which could be
+             * expressed as WT_EVICT_WALK_INCR / WT_EVICT_WALK_BASE). In the steady state, we want
+             * to get as many candidates as the eviction walk adds to the queue.
+             *
+             * That said, if there is only one entry, which is normal when populating an empty file,
+             * don't exclude it.
+             */
+            queue->evict_candidates = 1 + candidates + ((entries - candidates) - 1) / 3;
+            cache->read_gen_oldest = read_gen_oldest;
+        }
+    }
+    params->cache_eviction_pages_queued_post_lru += queue->evict_candidates;
+    queue->evict_current = queue->elements;
+    return (ret);
 }
 
-static inline uint64_t
-__btree_bytes_evictable(WT_params_t *param)
-{
-    return (params->btree_inmem_bytes - params->BTree_root->obj_size)
-        * (100 + BTREE_OVERHEAD_PCT) / 100;
-}
+/*
+ * WiredTiger's __evict_walk --
+ *     Fill in the array by walking the next set of pages.
+ *     In WiredTiger this function decides which tree should be walked.
+ *     At the moment we are only supporting a single B-Tree, so we
+ *     simply proceed with walking it.
+ */
 
-static inline uint64_t
-__btree_cache_bytes_inuse(WT_params_t *param)
+static int
+__btree_evict_walk(const cache_t *cache, WT_evict_queue *queue)
 {
-    return params->cache_inmem_bytes * (100 + BTREE_OVERHEAD_PCT) / 100;
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    u_int max_entries, retries, slot, start_slot;
+    u_int total_candidates;
+
+    start_slot = slot = queue->evict_entries; /* first available evict entry */
+    max_entries = WT_MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
+
+  retry:
+    while (slot < max_entries)
+        __btree_evict_walk_tree(cache, queue, max_entries, &slot);
+
+    /*
+     * Repeat the walks a few times if we don't find enough pages. Give up when we have some
+     * candidates and we aren't finding more.
+     */
+    if (slot < max_entries &&
+        (retries < 2 ||
+         (retries < WT_RETRY_MAX && (slot == queue->evict_entries || slot > start_slot)))) {
+        start_slot = slot;
+        ++retries;
+        goto retry;
+    }
+
+    /*
+     * If we didn't find any entries on a walk when we weren't interrupted, let our caller know.
+     */
+    if (queue->evict_entries == slot)
+        ret = -1;
+
+    queue->evict_entries = slot;
+    return (ret);
 }
 
 /*
@@ -558,10 +630,10 @@ static int
  *     Get a few page eviction candidates from a single underlying file.
  */
 static int
-__btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
+__btree_evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries, u_int *slotp)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    cache_obj_t *evict, *end, *evict_queue, *last_parent, *ref, *start;
+    cache_obj_t *evict, *end, *last_parent, *ref, *start;
     bool give_up;
     int ret;
     uint32_t min_pages, target_pages, remaining_slots, walk_flags;
@@ -569,7 +641,6 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
     uint64_t min_pages, pages_already_queued, pages_seen, pages_queued, refs_walked;
     bool give_up;
 
-    evict_queue = params->evict_queue;
     give_up = false;
     last_parent = NULL;
 
@@ -577,7 +648,7 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
      * Figure out how many slots to fill from this tree. Note that some care is taken in the
      * calculation to avoid overflow.
      */
-    start = evict_queue + *slotp;
+    start = queue->elements + *slotp;
     remaining_slots = max_entries - *slotp;
     if (params->evict_walk_progress >= params->evict_walk_target) {
         params->evict_walk_target = __btree_evict_walk_target(cache);
@@ -750,17 +821,14 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
                 continue;
         }
 
-        if (params->evict_aggressive)
-            goto fast;
-
         /*
          * Next, the WiredTiger code checks the transaction state of the page.
          * TODO: Add that later.
          */
-      fast: /* Do we jump here from more than one place? XXX: check. */
         DEBUG_ASSERT(params->evict_ref == NULL);
         DEBUG_ASSERT(*slot_p < max_entries);
-        params->evict_q[*slotp++] = ref;
+        printf("Adding page %s to queue %p at slot %d\n", __btree_page_tostring(ref), (void*)queue, (*slotp) + 1);
+        queue->elements[*slotp++] = ref;
         ++evict;
         ++pages_queued;
         ++params->evict_walk_progress;
@@ -773,9 +841,9 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
     params->cache_eviction_pages_queued += ((u_int)(evict - start));
 
     /*
-     * If we couldn't find the number of pages we were looking for, skip the tree next time.
+     * WiredTiger code: "If we couldn't find the number of pages we were looking for, skip the tree next time."
      *
-     * At the time of the writing this is not relevant to us, because we are only supporting
+     * At the time of the writing the above is not relevant to us, because we are only supporting
      * a single tree, so if we have to evict we must walk that tree.
      *
      * XXX -- not sure if I need to track the evict walk period given that we are supporting
@@ -867,11 +935,7 @@ __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
 
 static inline void
 __btree_print_node_nochildren(cache_obj_t *node) {
-    int64_t parent_addr = 0;
-
-    if (node->wt_page.parent_page != NULL)
-        parent_addr = node->wt_page.parent_page->obj_id;
-    printf("%lu %d [%lu]", node->obj_id, node->wt_page.page_type, parent_addr);
+    printf("%s", __btree_page_to_string(node);
 }
 
 static void
@@ -968,6 +1032,24 @@ __btree_remove(cache_t *cache, cache_obj_t *obj) {
 
     cache_evict_base(cache, obj, true);
 }
+
+/*
+ * We use this global buffer for pretty-printing the page. We are single-threaded, so it's okay to use
+ * this global buffer. We do this, so that we don't have to dynamically allocate the memory and the caller
+ * doesn't need to free it for us.
+ */
+#define PAGE_PRINT_BUFFER_SIZE 50
+char page_buffer[PAGE_PRINT_BUFFER_SIZE];
+
+static char *
+__btree_page_to_string(cache_obj_t *obj) {
+
+    snprintf(&page_buffer, PAGE_PRINT_BUFFER_SIZE, "page %lu [%lu], %s, read-gen: %d\0", obj->obj_id,
+             (obj->wt_page.parent_page == NULL)?0:obj->wt_page.parent_page->obj_id,
+             (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
+             obj->wt_page.read_gen);
+}
+
 #ifdef __cplusplus
 }
 #endif

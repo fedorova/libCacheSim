@@ -40,7 +40,9 @@ typedef struct {
 #define WT_EVICT_QUEUE_MAX 3
 typedef struct {
     cache_obj_t *elements;
-    u_int last_used_slot;
+    u_int evict_entries; /* Number of evict entries filled; index of the first available evict entry */
+    u_int evict_candidates; /* How many evictable candidates we have */
+    cache_obj_t *evict_current; /* The current entry we are evicting */
 } WT_evict_queue;
 
 typedef struct {
@@ -52,11 +54,11 @@ typedef struct {
     WT_evict_queue *evict_urgent_queue;
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
-    int evict_start_type;
     uint64_t btree_inmem_bytes;
     uint64_t cache_inmem_bytes;
-    uint32_t evict_entries;  /* first available evict slot */
+    bool evict_aggressive;
     uint32_t evict_slots;    /* total available evict slots */
+    u_int evict_start_type;
     uint32_t evict_walk_progress;
     uint32_t evict_walk_target;
 } WT_params_t;
