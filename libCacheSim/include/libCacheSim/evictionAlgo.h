@@ -37,11 +37,19 @@ typedef struct {
   int64_t n_byte_rewritten;
 } Clock_params_t;
 
+#define WT_EVICT_QUEUE_MAX 3
 typedef struct {
-    cache_obj_t *q_head;
-    cache_obj_t *q_tail;
+    cache_obj_t *elements;
+    u_int last_used_slot;
+} WT_evict_queue;
+
+typedef struct {
     uint32_t global_read_generation;
-    cache_obj_t *evict_q;
+    WT_evict_queue evict_queues[WT_EVICT_QUEUE_MAX];
+    WT_evict_queue *evict_current_queue;
+    WT_evict_queue *evict_fill_queue;
+    WT_evict_queue *evict_other_queue;
+    WT_evict_queue *evict_urgent_queue;
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
     int evict_start_type;
@@ -51,7 +59,6 @@ typedef struct {
     uint32_t evict_slots;    /* total available evict slots */
     uint32_t evict_walk_progress;
     uint32_t evict_walk_target;
-    int walk_flags;
 } WT_params_t;
 
 

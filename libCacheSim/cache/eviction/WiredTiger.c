@@ -18,8 +18,7 @@
 #define WT_EVICT_WALK_BASE 300
 #define WT_EVICT_WALK_INCR 100
 
-/* Maximum number of eviction queues */
-#define WT_EVICT_QUEUE_MAX 3
+
 
 typedef enum { /* Start position for eviction walk */
     WT_EVICT_WALK_NEXT,
@@ -51,12 +50,14 @@ static void WT_print_cache(const cache_t *cache);
 
 static int __btree_evict_target();
 static int __btree_evict_walk(cache_t *cache);
-static cache_obj_t *__btree_evict_walk_trek(cache_obj_t *start);
+static int __btree_evict_lru_walk(cache_t *cache);
+static cache_obj_t *__btree_evict_walk_tree(cache_obj_t *start);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
 static void __btree_print(cache_t *cache);
 static int __btree_random_descent(cache_t *cache, cache_obj_t *evict_start);
 static void __btree_remove(cache_t *cache, cache_obj_t *obj);
+static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags);
 
 
 /**
@@ -89,11 +90,18 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
 
     WT_params_t *params = (WT_params_t *)malloc(sizeof(WT_params_t));
     memset(params, 0, sizeof(WT_params_t));
-    params->q_head = NULL;
-    params->q_tail = NULL;
     params->evict_slots = WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR;
-    if ((params->evict_q = malloc(sizeof(cache_obj_t*) * params->evict_slots) == NULL))
-        return NULL;
+    for (int i = 0; i < WT_EVICT_QUEUE_MAX; i++) {
+        if ((params->evict_queues[i].elements = malloc(sizeof(cache_obj_t*) * params->evict_slots) == NULL))
+            return NULL;
+        params->evict_queues[i].last_used_slot = 0;
+    }
+
+    params->evict_current_queue = params->evict_fill_queue = params->evict_queues[0];
+    params->evict_other_queue = params->evict_queues[1];
+    params->evict_urgent_queue =  params->evict_queues[WT_EVICT_QUEUE_MAX];
+
+    /* XXX declare all the stats we are keeping */
 
     cache->eviction_params = params;
     srand(time(NULL));
@@ -381,6 +389,58 @@ __btree_evict_walk(const cache_t *cache)
 
     params->evict_entries = slot;
     return (ret);
+}
+
+/*
+ * WiredTiger's __evict_lru_walk --
+ *     Add pages to the LRU queue to be evicted from cache.
+ */
+static int
+__btree_evict_lru_walk(const cache_t *cache)
+{
+    WT_evict_queue *queue, *other_queue;
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+    if (params->evict_empty_score > 0)
+        params->evict_empty_score--;
+
+    /*
+     * We will fill the evict fill queue, but we are swapping the pointers
+     * of evict fill queue and evict other queue.
+     */
+    queue = params->evict_fill_queue;
+    /* This switches between the 0th and 1st queues */
+    other_queue = params->evict_q + (1 - (queue-params->evict_queues));
+    params->evict_fill_queue = other_queue;
+
+    /* If this queue is full, try the other one. */
+    if (__evict_queue_full(queue) && !__evict_queue_full(other_queue))
+        queue = other_queue;
+
+    /*
+     * If both queues are full and haven't been empty on recent refills, we're done.
+     */
+    if (__evict_queue_full(queue) && params->evict_empty_score < WT_EVICT_SCORE_CUTOFF)
+        return 0;
+    /*
+     * If the queue we are filling is empty, pages are being requested faster than they are being
+     * queued.
+     */
+    if (__evict_queue_empty(queue, false)) {
+        if (params->evict_flags == WT_CACHE_EVICT_HARD)
+            params->evict_empty_score =
+                MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
+        params->cache_eviction_queue_empty++;
+    } else
+        params->cache_eviction_queue_not_empty++;
+
+    /*
+     * Get some more pages to consider for eviction.
+     *
+     * If the walk is interrupted, we still need to sort the queue: the next walk assumes there are
+     * no entries beyond WT_EVICT_WALK_BASE.
+     */
+
 }
 
 static inline uint64_t
@@ -699,8 +759,8 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
          */
       fast: /* Do we jump here from more than one place? XXX: check. */
         DEBUG_ASSERT(params->evict_ref == NULL);
-        if (!__evict_push_candidate(session, queue, evict, ref)) /* XXX */
-            continue;
+        DEBUG_ASSERT(*slot_p < max_entries);
+        params->evict_q[*slotp++] = ref;
         ++evict;
         ++pages_queued;
         ++params->evict_walk_progress;
@@ -710,7 +770,6 @@ __btree_evict_walk_tree(const cache_t *cache, u_int max_entries, u_int *slotp)
             internal_pages_queued++;
     }
 
-    *slotp += (u_int)(evict - start);
     params->cache_eviction_pages_queued += ((u_int)(evict - start));
 
     /*
