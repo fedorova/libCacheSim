@@ -57,6 +57,7 @@ static void WT_print_cache(const cache_t *cache);
 static int __btree_evict_lru_walk(cache_t *cache);
 static int __btree_evict_target();
 static int __btree_evict_walk(cache_t *cache);
+static void __btree_evict_lru_pages(cache_t *cache);
 static cache_obj_t *__btree_evict_walk_tree(cache_obj_t *start);
 static uint64_t __btree_evict_priority(cache_t *cache, cache_obj_t *score);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
@@ -288,27 +289,16 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
  */
 static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    cache_obj_t *obj_to_evict = params->q_tail;
-    DEBUG_ASSERT(params->q_tail != NULL);
 
     INFO("WT_evict: \n");
 
-    params->q_tail = params->q_tail->queue.prev;
-    if (likely(params->q_tail != NULL)) {
-        params->q_tail->queue.next = NULL;
-    } else {
-        /* cache->n_obj has not been updated */
-        DEBUG_ASSERT(cache->n_obj == 1);
-        params->q_head = NULL;
-    }
-
-#if defined(TRACK_DEMOTION)
-    if (cache->track_demotion)
-        INFO("%ld demote %ld %ld\n", cache->n_req, obj_to_evict->create_time,
-               obj_to_evict->misc.next_access_vtime);
-#endif
+    __btree_evict_lru_walk(cache_t *cache);
+    __btree_evict_lru_pages(cache_t *cache);
 
     /* Remove object and its children from B-Tree */
+    /* XXX: eviction should not evict a parent with cached children.
+     * Create a function __btree_evict.
+     */
     __btree_remove(cache, obj_to_evict);
     __btree_print(cache);
 }
@@ -327,14 +317,17 @@ static void WT_evict(cache_t *cache, const request_t *req) {
  * cache
  */
 static bool WT_remove(cache_t *cache, const obj_id_t obj_id) {
+    /* XXX -- get rid of this */
     cache_obj_t *obj = hashtable_find_obj_id(cache->hashtable, obj_id);
+
     if (obj == NULL) {
         return false;
     }
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     INFO("WT_remove: \n");
 
-    remove_obj_from_list(&params->q_head, &params->q_tail, obj);
+    __btree_remove(cache, obj);
+
     /* XXX -- Remove from B-Tree */
     cache_remove_obj_base(cache, obj, true);
     return true;
@@ -1105,6 +1098,33 @@ __btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
         read_gen += WT_EVICT_INTL_SKEW;
 
     return read_gen;
+}
+
+/*
+ * Evict a page from the LRU queue. In WiredTiger we may find pages that are unavailable.
+ * Here we are single threaded and not supporting updates for now, so this shouldn't
+ * happen. So we are just executing the logic of __evict_page here.
+ */
+static void
+__btree_evict_lru_pages(cache_t *cache) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+    INFO("__btree_evict_lru_pages \n");
+
+    /* Find the right queue. Switch queues if necessary. */
+
+    /* Get the page at the queue's evict_current position. */
+
+    /* Update the current evict position for the next eviction to start at the right place */
+
+    /* Decide if we want to split the page (for later) */
+
+    /* Don't support modified pages for now */
+
+    /* Make sure the page has no children */
+
+    /* Remove the page from evict queue and from the tree */
+
 }
 
 #ifdef __cplusplus
