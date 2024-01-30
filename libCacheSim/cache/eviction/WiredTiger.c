@@ -58,14 +58,16 @@ static int __btree_evict_lru_walk(cache_t *cache);
 static int __btree_evict_target();
 static int __btree_evict_walk(cache_t *cache);
 static cache_obj_t *__btree_evict_walk_tree(cache_obj_t *start);
+static uint64_t __btree_evict_priority(cache_t *cache, cache_obj_t *score);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
 static char * __btree_page_tostring(ref)
 static void __btree_print(cache_t *cache);
 static int __btree_random_descent(cache_t *cache, cache_obj_t *evict_start);
 static void __btree_remove(cache_t *cache, cache_obj_t *obj);
+static int __btree_qsort_compare(void *a, void *b);
 static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags);
-static void __evict_queue_sort(WT_evict_queue *queue, u_int size);
+
 
 /**
  * @brief initialize a WiredTiger cache
@@ -422,7 +424,9 @@ __btree_evict_lru_walk(const cache_t *cache)
     /*
      * Sort the evict queue and set the number of non-empty elements
      */
-    __evict_queue_sort(queue->elements, params->evict_slots, &entries);
+    qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __btree_qsort_compare);
+    entries = queue->evict_entries;
+
     /*
      * If we have more entries than the maximum tracked between walks, clear them. Do this before
      * figuring out how many of the entries are candidates so we never end up with more candidates
@@ -434,7 +438,8 @@ __btree_evict_lru_walk(const cache_t *cache)
 
     if (entries == 0) {
         /*
-         * If there are no entries, there cannot be any candidates. Make we don't read past the end of the candidate list.
+         * If there are no entries, there cannot be any candidates. Make sure we don't read
+         * past the end of the candidate list.
          */
         queue->evict_candidates = 0;
         queue->evict_current = NULL;
@@ -829,6 +834,7 @@ __btree_evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_e
         DEBUG_ASSERT(*slot_p < max_entries);
         printf("Adding page %s to queue %p at slot %d\n", __btree_page_tostring(ref), (void*)queue, (*slotp) + 1);
         queue->elements[*slotp++] = ref;
+        ref->wt_page.score = __btree_evict_priority(cache, ref);
         ++evict;
         ++pages_queued;
         ++params->evict_walk_progress;
@@ -1048,6 +1054,57 @@ __btree_page_to_string(cache_obj_t *obj) {
              (obj->wt_page.parent_page == NULL)?0:obj->wt_page.parent_page->obj_id,
              (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
              obj->wt_page.read_gen);
+}
+
+
+/*
+ * A comparison function for the sorting algorithm.
+ */
+static int
+__btree_qsort_compare(void *a_arg, void *b_arg) {
+    const cache_obj_t *a, *b;
+    uint64_t a_score, b_score;
+
+    a = (cache_obj_t *)a_arg;
+    b = (cache_obj_t *)b_arg;
+    a_score = (a == NULL ? UINT64_MAX : a->wt_page.score);
+    b_score = (b == NULL ? UINT64_MAX : b->wt_page.score);
+
+    return ((a_score < b_score) ? -1 : (a_score == b_score) ? 0 : 1);
+}
+
+static uint64_t
+__btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    uint64_t read_gen;
+
+    /* Any page set to the oldest generation should be discarded. */
+    if (WT_READGEN_EVICT_SOON(ref->wt_page.read_gen))
+        return (WT_READGEN_OLDEST);
+
+    /* Any page from a dead tree is a great choice. */
+    /* TODO: We are not tracking dead B-Trees yet. */
+
+    /* Any empty page (leaf or internal), is a good choice. */
+    /* TODO: We are not supporting deletions yet, so this is for the future. */
+
+    /* Any large page in memory is likewise a good choice. */
+    if (ref->obj_size > cache->splitmempage) /* XXX set that */
+        return (WT_READGEN_OLDEST);
+
+    /*
+     * TODO: The following if-statement performs a different adjustment for modified
+     * pages, which we for now skip.
+     */
+    read_gen = ref->wt_page.read_gen;
+
+    read_gen += cache->evict_priority; /* XXX set that */
+
+#define WT_EVICT_INTL_SKEW WT_THOUSAND
+    if (ref->wt_page.page_type == WT_INTERNAL)
+        read_gen += WT_EVICT_INTL_SKEW;
+
+    return read_gen;
 }
 
 #ifdef __cplusplus
