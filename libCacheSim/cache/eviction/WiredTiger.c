@@ -44,6 +44,7 @@ typedef enum { /* Start position for eviction walk */
 extern "C" {
 #endif
 
+/* Public API */
 static void WT_free(cache_t *cache);
 static bool WT_get(cache_t *cache, const request_t *req);
 static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
@@ -54,21 +55,27 @@ static void WT_evict(cache_t *cache, const request_t *req);
 static bool WT_remove(cache_t *cache, const obj_id_t obj_id);
 static void WT_print_cache(const cache_t *cache);
 
-static int __btree_evict_lru_walk(cache_t *cache);
-static int __btree_evict_target();
-static int __btree_evict_walk(cache_t *cache);
-static void __btree_evict_lru_pages(cache_t *cache);
-static cache_obj_t *__btree_evict_walk_tree(cache_obj_t *start);
-static uint64_t __btree_evict_priority(cache_t *cache, cache_obj_t *score);
+/* Internal functions */
+
+/* BTree management */
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
 static char * __btree_page_tostring(ref)
 static void __btree_print(cache_t *cache);
 static int __btree_random_descent(cache_t *cache, cache_obj_t *evict_start);
 static void __btree_remove(cache_t *cache, cache_obj_t *obj);
-static int __btree_qsort_compare(void *a, void *b);
 static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags);
 
+/* Eviction */
+static void ___evict_lru_pages(cache_t *cache);
+static int __evict_lru_walk(cache_t *cache);
+static int __evict_qsort_compare(void *a, void *b);
+static inlne bool ___evict_queue_empty(WT_evict_queue *queue);
+static inline bool __evict_queue_full(WT_EVICT_QUEUE *queue);
+static uint64_t __evict_priority(cache_t *cache, cache_obj_t *score);
+static int ___evict_target();
+static int ___evict_walk(cache_t *cache);
+static cache_obj_t *__evict_walk_tree(cache_obj_t *start);
 
 /**
  * @brief initialize a WiredTiger cache
@@ -355,7 +362,7 @@ __btree_cache_bytes_inuse(WT_params_t *param)
  *     Add pages to the LRU queue to be evicted from cache.
  */
 static int
-__btree_evict_lru_walk(const cache_t *cache)
+__evict_lru_walk(const cache_t *cache)
 {
     WT_evict_queue *queue, *other_queue;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
@@ -383,6 +390,7 @@ __btree_evict_lru_walk(const cache_t *cache)
 
     /*
      * If both queues are full and haven't been empty on recent refills, we're done.
+     * XXX: set the evict_empty_score.
      */
     if (__evict_queue_full(queue) && params->evict_empty_score < WT_EVICT_SCORE_CUTOFF) {
         printf("evict_lru_walk: both queues full. Bailing out.\n");
@@ -391,6 +399,7 @@ __btree_evict_lru_walk(const cache_t *cache)
     /*
      * If the queue we are filling is empty, pages are being requested faster than they are being
      * queued.
+     * XXX: set evict_flags.
      */
     if (__evict_queue_empty(queue, false)) {
         if (params->evict_flags == WT_CACHE_EVICT_HARD)
@@ -406,12 +415,14 @@ __btree_evict_lru_walk(const cache_t *cache)
      * If the walk is interrupted, we still need to sort the queue: the next walk assumes there are
      * no entries beyond WT_EVICT_WALK_BASE.
      */
-    ret = __btree_evict_walk(cache, queue);
+    ret = __evict_walk(cache, queue);
 
     /*
      * XXX -- figure out if we need to switch queues, since we are going single-threaded for now.
      * We have locked the queue: in the (unusual) case where we are filling the current queue, mark
      * it empty so that subsequent requests switch to the other queue.
+     * If we mark the current queue as empty, how do we make sure that its candidates
+     * get evicted?
      */
 
     /*
@@ -1126,6 +1137,23 @@ __btree_evict_lru_pages(cache_t *cache) {
     /* Remove the page from evict queue and from the tree */
 
 }
+
+
+static bool
+__evict_queue_empty(WT_evict_queue *queue) {
+
+    if (queue->evict_current != NULL && queue->evict_current > queue->elements)
+        return true;
+    return false;
+}
+
+static inline bool
+__evict_queue_full(WT_EVICT_QUEUE *queue)
+{
+    return (queue->evict_current == queue->evict_queue && queue->evict_candidates != 0);
+}
+
+
 
 #ifdef __cplusplus
 }
