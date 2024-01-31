@@ -111,9 +111,22 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     for (int i = 0; i < WT_EVICT_QUEUE_MAX; i++) {
         if ((params->evict_queues[i].elements = malloc(sizeof(cache_obj_t*) * params->evict_slots) == NULL))
             return NULL;
+        memset(params->evict_queues[i].elements, 0, sizeof(cache_obj_t*) * params->evict_slots);
         params->evict_queues[i].evict_entries = 0; /* First available slot for eviction candidates */
     }
 
+    /*
+     * WiredTiger eviction has multiple queues and it switches which queue it fills and
+     * which queue it evicts from. I think the idea is that if the server is filling one queue,
+     * workers and applications can evict from another without contention.
+     *
+     * At the moment I am not emulating application threads or eviction workers, just purely
+     * the algorithm itself, so I am going to use a single queue and elide all the
+     * queue-switching logic.
+     *
+     * I am still allocating the other queues for now as a reminder to emulate them
+     * if we decide that we need to emulate threading and the server.
+     */
     params->evict_current_queue = params->evict_fill_queue = params->evict_queues[0];
     params->evict_other_queue = params->evict_queues[1];
     params->evict_urgent_queue =  params->evict_queues[WT_EVICT_QUEUE_MAX];
@@ -364,7 +377,7 @@ __btree_cache_bytes_inuse(WT_params_t *param)
 static int
 __evict_lru_walk(const cache_t *cache)
 {
-    WT_evict_queue *queue, *other_queue;
+    WT_evict_queue *queue;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     u_int entries;
 
@@ -372,36 +385,26 @@ __evict_lru_walk(const cache_t *cache)
         params->evict_empty_score--;
 
     /*
-     * We will fill the evict fill queue, but we are swapping the pointers
-     * of evict fill queue and evict other queue.
+     * We will fill the evict fill queue.
+     * TODO: Assume we have a single queue for now.
      */
     queue = params->evict_fill_queue;
-    /* This switches between the 0th and 1st queues */
-    other_queue = params->evict_q + (1 - (queue-params->evict_queues));
-    params->evict_fill_queue = other_queue;
+
 
     printf("evict_lru_walk will try the fill queue %p\n", queue);
 
     /* If this queue is full, try the other one. */
-    if (__evict_queue_full(queue) && !__evict_queue_full(other_queue)) {
-        queue = other_queue;
-        printf("evict_lru_walk: fill queue full, will use the other queue %p\n", queue);
-    }
-
-    /*
-     * If both queues are full and haven't been empty on recent refills, we're done.
-     * XXX: set the evict_empty_score.
-     */
-    if (__evict_queue_full(queue) && params->evict_empty_score < WT_EVICT_SCORE_CUTOFF) {
-        printf("evict_lru_walk: both queues full. Bailing out.\n");
+    if (__evict_queue_full(queue)) {
+        WARN("evict_lru_walk: queue full, bailing out\n");
         return 0;
     }
+
     /*
      * If the queue we are filling is empty, pages are being requested faster than they are being
      * queued.
      * XXX: set evict_flags.
      */
-    if (__evict_queue_empty(queue, false)) {
+    if (__evict_queue_empty(queue)) {
         if (params->evict_flags == WT_CACHE_EVICT_HARD)
             params->evict_empty_score =
                 MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
@@ -418,17 +421,9 @@ __evict_lru_walk(const cache_t *cache)
     ret = __evict_walk(cache, queue);
 
     /*
-     * XXX -- figure out if we need to switch queues, since we are going single-threaded for now.
-     * We have locked the queue: in the (unusual) case where we are filling the current queue, mark
-     * it empty so that subsequent requests switch to the other queue.
-     * If we mark the current queue as empty, how do we make sure that its candidates
-     * get evicted?
-     */
-
-    /*
      * Sort the evict queue and set the number of non-empty elements
      */
-    qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __btree_qsort_compare);
+    qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __evict_qsort_compare);
     entries = queue->evict_entries;
 
     /*
@@ -1117,12 +1112,14 @@ __btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
  * happen. So we are just executing the logic of __evict_page here.
  */
 static void
-__btree_evict_lru_pages(cache_t *cache) {
+__evict_lru_pages(cache_t *cache) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    WT_evict_queue *queue;
 
-    INFO("__btree_evict_lru_pages \n");
+    INFO("__evict_lru_pages \n");
 
-    /* Find the right queue. Switch queues if necessary. */
+    /* We assume for now that there is only one queue */
+    queue = params->evict_fill_queue.
 
     /* Get the page at the queue's evict_current position. */
 
