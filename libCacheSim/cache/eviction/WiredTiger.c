@@ -1121,7 +1121,7 @@ __evict_lru_pages(cache_t *cache) {
     /* Update the current evict position for the next eviction to start at the right place.
     */
     DEBUG_ASSERT(queue->evict_current <= params->evict_slots);
-    evict_victim = queue->elements[queue->evict_current++];
+    evict_victim = queue->elements[queue->evict_current];
 
     /*
      * Decide if we want to split the page (TODO).
@@ -1133,15 +1133,20 @@ __evict_lru_pages(cache_t *cache) {
         ERROR("WiredTiger: cannot evict internal page with children.\n");
 
     /* Remove the page from evict queue and from the tree */
-    queue->elements[queue->evict_current-1] = NULL;
+    queue->elements[queue->evict_current] = NULL;
     __btree_remove(cache, evict_victim);
+
+    if (++queue->evict_current >= queue->evict_candidates)
+        queue->evict_current = -1;
 }
 
 
 static bool
 __evict_queue_empty(WT_evict_queue *queue) {
 
-    if (queue->evict_current != -1 && queue->evict_current > params->evict_slots)
+    if (queue->evict_current == -1)
+        return true;
+    if(queue->evict_current >= queue->evict_candidates)
         return true;
     return false;
 }
