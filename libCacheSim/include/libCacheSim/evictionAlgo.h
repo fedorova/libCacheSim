@@ -37,12 +37,12 @@ typedef struct {
   int64_t n_byte_rewritten;
 } Clock_params_t;
 
-#define WT_EVICT_QUEUE_MAX 3
+#define WT_EVICT_QUEUE_MAX 3  /* For future. We assume a single evict queue for now. */
 typedef struct {
     cache_obj_t *elements;
     u_int evict_entries; /* Number of evict entries filled; index of the first available evict entry */
     u_int evict_candidates; /* How many evictable candidates we have */
-    cache_obj_t *evict_current; /* The current entry we are evicting */
+    u_int evict_current;    /* The current entry we are evicting */
 } WT_evict_queue;
 
 typedef struct {

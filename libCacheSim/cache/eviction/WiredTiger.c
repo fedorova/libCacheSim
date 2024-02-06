@@ -73,8 +73,10 @@ static int __evict_qsort_compare(void *a, void *b);
 static inlne bool ___evict_queue_empty(WT_evict_queue *queue);
 static inline bool __evict_queue_full(WT_EVICT_QUEUE *queue);
 static uint64_t __evict_priority(cache_t *cache, cache_obj_t *score);
-static int ___evict_target();
+static bool __evict_queue_empty(WT_evict_queue *queue);
+static bool __evict_queue_full(WT_EVICT_QUEUE *queue);
 static int ___evict_walk(cache_t *cache);
+static int ___evict_walk_target(cache_t *cache);
 static cache_obj_t *__evict_walk_tree(cache_obj_t *start);
 
 /**
@@ -312,8 +314,9 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
     INFO("WT_evict: \n");
 
-    __btree_evict_lru_walk(cache_t *cache);
-    __btree_evict_lru_pages(cache_t *cache);
+    /* The walk function will return without filling if the evict queue is full */
+    __evict_lru_walk(cache_t *cache);
+    __evict_lru_pages(cache_t *cache);
 
     /* Remove object and its children from B-Tree */
     /* XXX: eviction should not evict a parent with cached children.
@@ -373,6 +376,16 @@ __btree_cache_bytes_inuse(WT_params_t *param)
 /*
  * WiredTiger's __evict_lru_walk --
  *     Add pages to the LRU queue to be evicted from cache.
+ *
+ *     1. Find the queue we will fill. In the current implementation we assume a single
+ *     queue only. (This is because we are single threaded, and queue filling and eviction
+ *     is done by the same thread.) If the queue is full, no need to fill it, we are done.
+ *
+ *     2. Call __evict_walk, which will fill the queue.
+ *
+ *     3. Decide how many of the filled entries are going to be candidates for
+ *     eviction. That is determined by how aggressively we want to evict and on the
+ *     read generations of the filled entries.
  */
 static int
 __evict_lru_walk(const cache_t *cache)
@@ -390,10 +403,7 @@ __evict_lru_walk(const cache_t *cache)
      */
     queue = params->evict_fill_queue;
 
-
-    printf("evict_lru_walk will try the fill queue %p\n", queue);
-
-    /* If this queue is full, try the other one. */
+    /* If the queue is full, we are done. */
     if (__evict_queue_full(queue)) {
         WARN("evict_lru_walk: queue full, bailing out\n");
         return 0;
@@ -441,7 +451,7 @@ __evict_lru_walk(const cache_t *cache)
          * past the end of the candidate list.
          */
         queue->evict_candidates = 0;
-        queue->evict_current = NULL;
+        queue->evict_current = -1;
     }
     if (params->evict_aggressive)
         queue->evict_candidates = entries;
@@ -484,7 +494,7 @@ __evict_lru_walk(const cache_t *cache)
         }
     }
     params->cache_eviction_pages_queued_post_lru += queue->evict_candidates;
-    queue->evict_current = queue->elements;
+    queue->evict_current = 0;
     return (ret);
 }
 
@@ -497,7 +507,7 @@ __evict_lru_walk(const cache_t *cache)
  */
 
 static int
-__btree_evict_walk(const cache_t *cache, WT_evict_queue *queue)
+__evict_walk(const cache_t *cache, WT_evict_queue *queue)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     u_int max_entries, retries, slot, start_slot;
@@ -508,7 +518,7 @@ __btree_evict_walk(const cache_t *cache, WT_evict_queue *queue)
 
   retry:
     while (slot < max_entries)
-        __btree_evict_walk_tree(cache, queue, max_entries, &slot);
+        __evict_walk_tree(cache, queue, max_entries, &slot);
 
     /*
      * Repeat the walks a few times if we don't find enough pages. Give up when we have some
@@ -538,7 +548,7 @@ __btree_evict_walk(const cache_t *cache, WT_evict_queue *queue)
  *    only clean pages.
  */
 static int
-__btree_evict_walk_target(const cache_t *cache)
+__evict_walk_target(cache_t *cache)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     uint64_t btree_inuse, bytes_per_slot, cache_inuse;
@@ -634,7 +644,7 @@ static int
  *     Get a few page eviction candidates from a single underlying file.
  */
 static int
-__btree_evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries, u_int *slotp)
+__evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries, u_int *slotp)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *evict, *end, *last_parent, *ref, *start;
@@ -652,10 +662,10 @@ __btree_evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_e
      * Figure out how many slots to fill from this tree. Note that some care is taken in the
      * calculation to avoid overflow.
      */
-    start = queue->elements + *slotp;
+    start = queue->elements[*slotp];
     remaining_slots = max_entries - *slotp;
     if (params->evict_walk_progress >= params->evict_walk_target) {
-        params->evict_walk_target = __btree_evict_walk_target(cache);
+        params->evict_walk_target = __evict_walk_target(cache);
         params->evict_walk_progress = 0;
     }
     target_pages = params->evict_walk_target - params->evict_walk_progress;
@@ -831,7 +841,7 @@ __btree_evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_e
          */
         DEBUG_ASSERT(params->evict_ref == NULL);
         DEBUG_ASSERT(*slot_p < max_entries);
-        printf("Adding page %s to queue %p at slot %d\n", __btree_page_tostring(ref), (void*)queue, (*slotp) + 1);
+        printf("Adding page %s to queue at slot %d\n", __btree_page_tostring(ref), (*slotp) + 1);
         queue->elements[*slotp++] = ref;
         ref->wt_page.score = __btree_evict_priority(cache, ref);
         ++evict;
@@ -1113,41 +1123,48 @@ __btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
  */
 static void
 __evict_lru_pages(cache_t *cache) {
+    cache_obj_t *evict_victim;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     WT_evict_queue *queue;
 
     INFO("__evict_lru_pages \n");
 
     /* We assume for now that there is only one queue */
-    queue = params->evict_fill_queue.
+    queue = params->evict_fill_queue;
 
-    /* Get the page at the queue's evict_current position. */
+    /*
+     * Get the page at the queue's evict_current position.
+    /* Update the current evict position for the next eviction to start at the right place.
+    */
+    DEBUG_ASSERT(queue->evict_current <= params->evict_slots);
+    evict_victim = queue->elements[queue->evict_current++];
 
-    /* Update the current evict position for the next eviction to start at the right place */
-
-    /* Decide if we want to split the page (for later) */
-
-    /* Don't support modified pages for now */
+    /*
+     * Decide if we want to split the page (TODO).
+    /* Don't support modified pages for now.
+    */
 
     /* Make sure the page has no children */
+    if (obj->wt_page.page_type == WT_INTERNAL && getMapSize(obj->wt_page.children) != 0)
+        ERROR("WiredTiger: cannot evict internal page with children.\n");
 
     /* Remove the page from evict queue and from the tree */
-
+    queue->elements[queue->evict_current-1] = NULL;
+    __btree_remove(cache, evict_victim);
 }
 
 
 static bool
 __evict_queue_empty(WT_evict_queue *queue) {
 
-    if (queue->evict_current != NULL && queue->evict_current > queue->elements)
+    if (queue->evict_current != -1 && queue->evict_current > params->evict_slots)
         return true;
     return false;
 }
 
 static inline bool
-__evict_queue_full(WT_EVICT_QUEUE *queue)
-{
-    return (queue->evict_current == queue->evict_queue && queue->evict_candidates != 0);
+__evict_queue_full(WT_EVICT_QUEUE *queue) {
+    return (queue->evict_current == 0 && queue->evict_candidates != 0);
 }
 
 
