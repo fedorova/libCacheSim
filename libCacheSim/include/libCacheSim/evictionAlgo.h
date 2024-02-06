@@ -37,9 +37,8 @@ typedef struct {
   int64_t n_byte_rewritten;
 } Clock_params_t;
 
-#define WT_EVICT_QUEUE_MAX 3  /* For future. We assume a single evict queue for now. */
 typedef struct {
-    cache_obj_t *elements;
+    cache_obj_t **elements;
     u_int evict_entries; /* Number of evict entries filled; index of the first available evict entry */
     u_int evict_candidates; /* How many evictable candidates we have */
     u_int evict_current;    /* The current entry we are evicting */
@@ -47,20 +46,22 @@ typedef struct {
 
 typedef struct {
     uint32_t global_read_generation;
-    WT_evict_queue evict_queues[WT_EVICT_QUEUE_MAX];
-    WT_evict_queue *evict_current_queue;
-    WT_evict_queue *evict_fill_queue;
-    WT_evict_queue *evict_other_queue;
-    WT_evict_queue *evict_urgent_queue;
+    WT_evict_queue evict_fill_queue;
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
     uint64_t btree_inmem_bytes;
+    uint64_t cache_eviction_pages_queued_post_lru;
+    uint64_t cache_eviction_queue_empty;
+    uint64_t cache_eviction_queue_not_empty;
     uint64_t cache_inmem_bytes;
     bool evict_aggressive;
+    uint32_t evict_empty_score;
+    uint32_t evict_flags;
     uint32_t evict_slots;    /* total available evict slots */
     u_int evict_start_type;
     uint32_t evict_walk_progress;
     uint32_t evict_walk_target;
+    uint64_t read_gen_oldest;
 } WT_params_t;
 
 
