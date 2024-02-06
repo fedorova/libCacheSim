@@ -294,11 +294,9 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
 static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
   WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
-  INFO("WT_to_evict: \n");
-  DEBUG_ASSERT(params->q_tail != NULL || cache->occupied_byte == 0);
-
-  cache->to_evict_candidate_gen_vtime = cache->n_req;
-  return params->q_tail;
+  WARN("WT_to_evict: \n");
+  ASSERT(false);
+  return NULL;
 }
 
 /**
@@ -318,11 +316,6 @@ static void WT_evict(cache_t *cache, const request_t *req) {
     __evict_lru_walk(cache_t *cache);
     __evict_lru_pages(cache_t *cache);
 
-    /* Remove object and its children from B-Tree */
-    /* XXX: eviction should not evict a parent with cached children.
-     * Create a function __btree_evict.
-     */
-    __btree_remove(cache, obj_to_evict);
     __btree_print(cache);
 }
 
@@ -340,19 +333,10 @@ static void WT_evict(cache_t *cache, const request_t *req) {
  * cache
  */
 static bool WT_remove(cache_t *cache, const obj_id_t obj_id) {
-    /* XXX -- get rid of this */
-    cache_obj_t *obj = hashtable_find_obj_id(cache->hashtable, obj_id);
-
-    if (obj == NULL) {
-        return false;
-    }
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
     INFO("WT_remove: \n");
-
     __btree_remove(cache, obj);
-
-    /* XXX -- Remove from B-Tree */
-    cache_remove_obj_base(cache, obj, true);
     return true;
 }
 
