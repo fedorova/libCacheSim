@@ -138,10 +138,13 @@ typedef struct {
 } __attribute__((packed)) myclock_obj_params_t;
 
 typedef struct {
-    int64_t last_access_time;
-    int64_t read_gen;
-    int8_t page_type;
+    uint64_t evict_flags;
+    uint64_t evict_pass_gen;
+    uint64_t evict_score;
     bool in_tree;
+    int64_t last_access_time;
+    int8_t page_type;
+    int64_t read_gen;
     Map children;
     struct cache_obj *parent_page;
 } wt_page_t;

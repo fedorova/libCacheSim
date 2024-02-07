@@ -39,7 +39,7 @@ typedef struct {
 
 typedef struct {
     cache_obj_t **elements;
-    u_int evict_entries; /* Number of evict entries filled; index of the first available evict entry */
+    u_int evict_entries; /* Number of entries filled; index of the first available evict entry */
     u_int evict_candidates; /* How many evictable candidates we have */
     u_int evict_current;    /* The current entry we are evicting */
 } WT_evict_queue;
@@ -50,18 +50,37 @@ typedef struct {
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
     uint64_t btree_inmem_bytes;
+    uint64_t cache_eviction_internal_pages_already_queued;
+    uint64_t cache_eviction_internal_pages_queued;
+    uint64_t cache_eviction_internal_pages_seen;
+    uint64_t cache_eviction_pages_already_queued;
+    uint64_t cache_eviction_pages_queued;
     uint64_t cache_eviction_pages_queued_post_lru;
+
+    uint64_t cache_eviction_pages_seen;
     uint64_t cache_eviction_queue_empty;
     uint64_t cache_eviction_queue_not_empty;
+    uint64_t cache_eviction_walk;
+    uint64_t cache_eviction_walks_abandoned;
+    uint64_t cache_eviction_walks_ended;
+    uint64_t cache_eviction_walks_gave_up_ratio;
+    uint64_t cache_eviction_walks_gave_up_no_targets;
+    uint64_t cache_eviction_walk_passes;
+    uint64_t cache_eviction_walks_started;
+    uint64_t cache_eviction_walks_stopped;
     uint64_t cache_inmem_bytes;
     bool evict_aggressive;
     uint32_t evict_empty_score;
     uint32_t evict_flags;
+    uint64_t evict_pass_gen; /* total available evict slots */
+    uint64_t evict_priority;
     uint32_t evict_slots;    /* total available evict slots */
     u_int evict_start_type;
+    uint64_t evict_walk_period;
     uint32_t evict_walk_progress;
     uint32_t evict_walk_target;
     uint64_t read_gen_oldest;
+    uint64_t splitmempage;
 } WT_params_t;
 
 

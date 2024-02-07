@@ -21,6 +21,8 @@
 #define WT_EVICT_WALK_BASE 300
 #define WT_EVICT_WALK_INCR 100
 
+#define WT_PAGE_EVICT_LRU 1
+
 #define WT_READGEN_NOTSET 0
 #define WT_READGEN_OLDEST 1
 #define WT_READGEN_WONT_NEED 2
@@ -30,6 +32,7 @@
 #define WT_READGEN_STEP 100
 
 #define WT_RETRY_MAX 10
+#define WT_THOUSAND 1000
 
 typedef enum { /* Start position for eviction walk */
     WT_EVICT_WALK_NEXT,
@@ -64,12 +67,15 @@ static void WT_print_cache(const cache_t *cache);
 
 /* BTree management */
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
-static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type, cache_obj_t *parent_obj, int read_gen);
-static char * __btree_page_tostring(cache_obj_t *obj);
+static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type,
+                             cache_obj_t *parent_obj, int read_gen);
+static char * __btree_page_to_string(cache_obj_t *obj);
 static void __btree_print(const cache_t *cache);
-static int __btree_random_descent(cache_t *cache);
-static void __btree_remove(cache_t *cache, cache_obj_t *obj);
-static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags);
+static cache_obj_t * __btree_random_descent(const cache_t *cache);
+static uint64_t __btree_readgen_new(const cache_t *cache);
+static void __btree_remove(const cache_t *cache, cache_obj_t *obj);
+static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
+                                   int walk_flags);
 
 /* Eviction */
 static void __evict_lru_pages(const cache_t *cache);
@@ -77,7 +83,7 @@ static int __evict_lru_walk(const cache_t *cache);
 static int __evict_qsort_compare(const void *a, const void *b);
 static inline bool ___evict_queue_empty(WT_evict_queue *queue);
 static inline bool __evict_queue_full(WT_evict_queue *queue);
-static uint64_t __evict_priority(cache_t *cache, cache_obj_t *score);
+static uint64_t __evict_priority(const cache_t *cache, cache_obj_t *score);
 static bool __evict_queue_empty(WT_evict_queue *queue);
 static bool __evict_queue_full(WT_evict_queue *queue);
 static int __evict_walk(const cache_t *cache, WT_evict_queue *queue);
@@ -438,7 +444,7 @@ __evict_lru_walk(const cache_t *cache)
          */
         read_gen_oldest = WT_READGEN_START_VALUE;
         for (candidates = 0; candidates < entries; ++candidates) {
-            read_gen_oldest = queue->elements[candidates]->wt_page.score;
+            read_gen_oldest = queue->elements[candidates]->wt_page.evict_score;
             if (!WT_READGEN_EVICT_SOON(read_gen_oldest))
                 break;
         }
@@ -623,13 +629,14 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *evict, *end, *last_parent, *ref, *start;
     bool give_up;
-    int ret;
+    int ret, refs_walked, restarts;
     uint32_t target_pages, remaining_slots, walk_flags;
     uint64_t internal_pages_already_queued, internal_pages_queued, internal_pages_seen;
-    uint64_t min_pages, pages_already_queued, pages_seen, pages_queued, refs_walked;
+    uint64_t min_pages, pages_already_queued, pages_seen, pages_queued;
 
     give_up = false;
     last_parent = NULL;
+    restarts = 0;
 
     /*
      * Figure out how many slots to fill from this tree. Note that some care is taken in the
@@ -717,7 +724,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
             break;
         }
         if (ref == NULL) {
-            params->cache_eviction_walks_ended;
+            params->cache_eviction_walks_ended++;
 
             if (++restarts == 2) {
                 params->cache_eviction_walks_stopped++;
@@ -736,14 +743,14 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          * TODO: here the WiredTiger code checks if the page is modified. We are not
          * doing this for now. Will need to change in the future.
          */
-        node->wt_page.evict_pass_gen = params->evict_pass_gen;
+        ref->wt_page.evict_pass_gen = params->evict_pass_gen;
 
-        if (node->wt_page.page_type == WT_INTERNAL)
+        if (ref->wt_page.page_type == WT_INTERNAL)
              internal_pages_seen++;
 
-        if (node->wt_page.page_evict == WT_PAGE_EVICT_LRU) {
+        if (ref->wt_page.evict_flags == WT_PAGE_EVICT_LRU) {
             pages_already_queued++;
-            if (node->wt_page.page_type == WT_INTERNAL)
+            if (ref->wt_page.page_type == WT_INTERNAL)
                 internal_pages_already_queued++;
             continue;
         }
@@ -753,8 +760,8 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
           * Don't queue dirty pages in trees during checkpoints.
           * TODO: We skip this check for now.
           */
-        if (node->wt_page.read_gen == WT_READGEN_NOTSET)
-            node->wt_page.read_gen = WT_READGEN_NEW; /* XXX: Figure out how to set this */
+        if (ref->wt_page.read_gen == WT_READGEN_NOTSET)
+            ref->wt_page.read_gen = __btree_readgen_new(cache);
 
         /*
          * Then in the original code we have the logic for pages being forcibly evicted,
@@ -801,8 +808,8 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          *
          * TODO: We don't need eviction debug mode and we currently only support a single tree.
          */
-        if (note->wt_page.page_type == WT_INTERNAL) {
-            if (getMapSize(node->children) > 0)
+        if (ref->wt_page.page_type == WT_INTERNAL) {
+            if (getMapSize(ref->wt_page.children) > 0)
                 continue;
             if (!params->evict_aggressive)
                 continue;
@@ -814,9 +821,10 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          */
         DEBUG_ASSERT(params->evict_ref == NULL);
         DEBUG_ASSERT(*slot_p < max_entries);
-        printf("Adding page %s to queue at slot %d\n", __btree_page_tostring(ref), (*slotp) + 1);
+        printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp) + 1);
         queue->elements[*slotp++] = ref;
-        ref->wt_page.score = __btree_evict_priority(cache, ref);
+        ref->wt_page.evict_score = __evict_priority(cache, ref);
+        ref->wt_page.evict_flags = WT_PAGE_EVICT_LRU;
         ++evict;
         ++pages_queued;
         ++params->evict_walk_progress;
@@ -829,7 +837,8 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     params->cache_eviction_pages_queued += ((u_int)(evict - start));
 
     /*
-     * WiredTiger code: "If we couldn't find the number of pages we were looking for, skip the tree next time."
+     * WiredTiger code: "If we couldn't find the number of pages we were looking for,
+     * skip the tree next time."
      *
      * At the time of the writing the above is not relevant to us, because we are only supporting
      * a single tree, so if we have to evict we must walk that tree.
@@ -838,7 +847,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
      * a single tree. Keep it for now.
      */
     if (pages_queued < target_pages / 2)
-        params->evict_walk_period = WT_MIN(WT_MAX(1, 2 * btree->evict_walk_period), 100);
+        params->evict_walk_period = MIN(MAX(1, 2 * params->evict_walk_period), 100);
     else if (pages_queued == target_pages) {
         params->evict_walk_period = 0;
         /*
@@ -863,9 +872,9 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
                 params->cache_eviction_walks_abandoned++;
             ref = NULL;
         } else
-            while (ref != NULL && ref->wt_page->read_gen == WT_READGEN_OLDEST)
+            while (ref != NULL && ref->wt_page.read_gen == WT_READGEN_OLDEST)
                 ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags);
-        btree->evict_ref = ref;
+        params->evict_ref = ref; /* XXX -- check why we set that */
     }
 
     params->cache_eviction_walk += refs_walked;
@@ -916,14 +925,14 @@ __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
      * These are the same as long as we are supporting only a single B-Tree, but keep track of
      * them separately in case we implement the multi-B-tree functionality.
      */
-    cache_params->cache_inmem_bytes += obj->size;
-    cache_params->btree_inmem_bytes += obj->size;
+    cache_params->cache_inmem_bytes += obj->obj_size;
+    cache_params->btree_inmem_bytes += obj->obj_size;
     return 0;
 }
 
 static inline void
 __btree_print_node_nochildren(cache_obj_t *node) {
-    printf("%s", __btree_page_to_string(node);
+    printf("%s", __btree_page_to_string(node));
 }
 
 static void
@@ -949,7 +958,7 @@ __btree_print_node(cache_obj_t *node, int times)
 }
 
 static void
-__btree_print(cache_t *cache){
+__btree_print(const cache_t *cache){
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
     printf("BEGIN ----------------------------------------\n");
@@ -961,18 +970,21 @@ __btree_print(cache_t *cache){
  * WiredTiger's __wt_random_descent --
  *     Find a random page in a tree for eviction.
  *
- * In WiredTiger during random descent during eviction, we may get back a leaf page or an internal page.
- * An internal page would get returned either if it has no children or if we randomly selected a child that
- * is not present in the cache or has been deleted.  See __wt_page_in_func and __wt_random_descent.
+ * In WiredTiger during random descent during eviction, we may get back a leaf page or
+ * an internal page. An internal page would get returned either if it has no children or
+ * if we randomly selected a child that is not present in the cache or has been deleted.
+ * See __wt_page_in_func and __wt_random_descent.
  *
  * In our simulation, we would never return an internal page that has:
- * -- an uncached child, because uncached children are not part of our children map. Our code always selects
- * among cached children, so we will always return a cached child if one is present.
- * -- a deleted child. For the same reason as it wouldn't return the unached child and also for the reason that
- * we are not supporting read/write workloads for now – because we don’t emulate the code path evicting dirty pages.
+ * -- an uncached child, because uncached children are not part of our children map.
+ * Our code always selects among cached children, so we will always return a cached child if
+ * one is present.
+ * -- a deleted child. For the same reason as it wouldn't return the unached child and also
+ * for the reason that we are not supporting read/write workloads for now – because we don’t
+ * emulate the code path evicting dirty pages.
  * XXX -- double check the implementation. Do we need a starting node?
  */
-static cache_obj_t
+static cache_obj_t *
 __btree_random_descent(const cache_t *cache)
 {
     cache_obj_t *current_node;
@@ -991,8 +1003,8 @@ __btree_random_descent(const cache_t *cache)
             current_node = getValueAtIndex(children, rand() % children_size);
         else break;
     }
-    if (current != params->BTree_root)
-        return current;
+    if (current_node != params->BTree_root)
+        return current_node;
     return NULL;
 }
 
@@ -1000,7 +1012,7 @@ __btree_random_descent(const cache_t *cache)
  * Recursively remove the object's children from the B-Tree, and remove itself from its parent.
  */
 static void
-__btree_remove(cache_t *cache, cache_obj_t *obj) {
+__btree_remove(const cache_t *cache, cache_obj_t *obj) {
     int i;
 
     DEBUG_ASSERT(obj != NULL);
@@ -1019,13 +1031,13 @@ __btree_remove(cache_t *cache, cache_obj_t *obj) {
     INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id, obj->wt_page.parent_page->obj_id,
          obj->wt_page.parent_page->wt_page.children);
 
-    cache_evict_base(cache, obj, true);
+    cache_evict_base((cache_t *)cache, obj, true);
 }
 
 /*
- * We use this global buffer for pretty-printing the page. We are single-threaded, so it's okay to use
- * this global buffer. We do this, so that we don't have to dynamically allocate the memory and the caller
- * doesn't need to free it for us.
+ * We use this global buffer for pretty-printing the page. We are single-threaded, so it's okay
+ * to use this global buffer. We do this, so that we don't have to dynamically allocate the memory
+ * and the caller doesn't need to free it for us.
  */
 #define PAGE_PRINT_BUFFER_SIZE 50
 char page_buffer[PAGE_PRINT_BUFFER_SIZE];
@@ -1033,7 +1045,7 @@ char page_buffer[PAGE_PRINT_BUFFER_SIZE];
 static char *
 __btree_page_to_string(cache_obj_t *obj) {
 
-    snprintf(&page_buffer, PAGE_PRINT_BUFFER_SIZE, "page %lu [%lu], %s, read-gen: %ld\0", obj->obj_id,
+    snprintf((char*)&page_buffer, PAGE_PRINT_BUFFER_SIZE, "page %lu [%lu], %s, read-gen: %ld", obj->obj_id,
              (obj->wt_page.parent_page == NULL)?0:obj->wt_page.parent_page->obj_id,
              (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
              obj->wt_page.read_gen);
@@ -1051,14 +1063,14 @@ __evict_qsort_compare(const void *a_arg, const void *b_arg) {
 
     a = (cache_obj_t *)a_arg;
     b = (cache_obj_t *)b_arg;
-    a_score = (a == NULL ? UINT64_MAX : a->wt_page.score);
-    b_score = (b == NULL ? UINT64_MAX : b->wt_page.score);
+    a_score = (a == NULL ? UINT64_MAX : a->wt_page.evict_score);
+    b_score = (b == NULL ? UINT64_MAX : b->wt_page.evict_score);
 
     return ((a_score < b_score) ? -1 : (a_score == b_score) ? 0 : 1);
 }
 
 static uint64_t
-__btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
+__evict_priority(const cache_t *cache, cache_obj_t *ref) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     uint64_t read_gen;
 
@@ -1073,7 +1085,7 @@ __btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
     /* TODO: We are not supporting deletions yet, so this is for the future. */
 
     /* Any large page in memory is likewise a good choice. */
-    if (ref->obj_size > cache->splitmempage) /* XXX set that */
+    if (ref->obj_size > params->splitmempage) /* XXX set that */
         return (WT_READGEN_OLDEST);
 
     /*
@@ -1082,7 +1094,7 @@ __btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
      */
     read_gen = ref->wt_page.read_gen;
 
-    read_gen += cache->evict_priority; /* XXX set that */
+    read_gen += params->evict_priority; /* XXX set that */
 
 #define WT_EVICT_INTL_SKEW WT_THOUSAND
     if (ref->wt_page.page_type == WT_INTERNAL)
@@ -1097,7 +1109,7 @@ __btree_evict_priority(cache_t *cache, cache_obj_t *ref) {
  * happen. So we are just executing the logic of __evict_page here.
  */
 static void
-__evict_lru_pages(cache_t *cache) {
+__evict_lru_pages(const cache_t *cache) {
     cache_obj_t *evict_victim;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     WT_evict_queue *queue;
@@ -1105,7 +1117,7 @@ __evict_lru_pages(cache_t *cache) {
     INFO("__evict_lru_pages \n");
 
     /* We assume for now that there is only one queue */
-    queue = params->evict_fill_queue;
+    queue = &params->evict_fill_queue;
 
     /*
      * Get the page at the queue's evict_current position.
@@ -1120,7 +1132,7 @@ __evict_lru_pages(cache_t *cache) {
     */
 
     /* Make sure the page has no children */
-    if (obj->wt_page.page_type == WT_INTERNAL && getMapSize(obj->wt_page.children) != 0)
+    if (evict_victim->wt_page.page_type == WT_INTERNAL && getMapSize(evict_victim->wt_page.children) != 0)
         ERROR("WiredTiger: cannot evict internal page with children.\n");
 
     /* Remove the page from evict queue and from the tree */
@@ -1147,7 +1159,11 @@ __evict_queue_full(WT_evict_queue *queue) {
     return (queue->evict_current == 0 && queue->evict_candidates != 0);
 }
 
-
+/* XXX -- fix that!!! */
+static uint64_t
+__btree_readgen_new(const cache_t *cache) {
+    return WT_THOUSAND;
+}
 
 #ifdef __cplusplus
 }
