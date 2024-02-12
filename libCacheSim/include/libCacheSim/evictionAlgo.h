@@ -69,12 +69,15 @@ typedef struct {
     uint64_t cache_eviction_walks_started;
     uint64_t cache_eviction_walks_stopped;
     uint64_t cache_inmem_bytes;
+    uint64_t cache_size;
     bool evict_aggressive;
     uint32_t evict_empty_score;
     uint32_t evict_flags;
-    uint64_t evict_pass_gen; /* total available evict slots */
+    uint64_t evict_pass_gen;   /* total available evict slots */
     uint64_t evict_priority;
-    uint32_t evict_slots;    /* total available evict slots */
+    uint32_t evict_slots;      /* total available evict slots */
+    uint64_t eviction_target;  /* target percent cache full for eviction */
+    uint64_t eviction_trigger; /* percent cache full when we begin eviction */
     u_int evict_start_type;
     uint64_t evict_walk_period;
     uint32_t evict_walk_progress;

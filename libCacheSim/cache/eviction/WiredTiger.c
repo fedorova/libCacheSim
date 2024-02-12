@@ -48,6 +48,10 @@ typedef enum { /* Start position for eviction walk */
 
 #define WT_READGEN_OLDEST 1
 
+/* These flags must be powers of two -- so we have binary numbers with a single bit set. */
+#define WT_CACHE_EVICT_CLEAN 1 << 0
+#define WT_CACHE_EVICT_CLEAN_HARD 1 << 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -77,6 +81,10 @@ static void __btree_remove(const cache_t *cache, cache_obj_t *obj);
 static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
                                    int walk_flags);
 
+#define FLAG_SET(memory, value) (memory |= value)
+#define FLAG_ISSET(memory, value) ((memory & value) != 0)
+#define FLAG_CLEAR(memory, value) (((memory) &= ~(value)))
+
 /* Eviction */
 static void __evict_lru_pages(const cache_t *cache);
 static int __evict_lru_walk(const cache_t *cache);
@@ -89,6 +97,7 @@ static bool __evict_queue_full(WT_evict_queue *queue);
 static int __evict_walk(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk_target(const cache_t *cache);
 static int __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries, u_int *slotp);
+    static bool __evict_update_work(const cache_t *cache);
 
 /**
  * @brief initialize a WiredTiger cache
@@ -124,9 +133,8 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     if ((params->evict_fill_queue.elements = malloc(sizeof(cache_obj_t*) * params->evict_slots)) == NULL)
         return NULL;
     memset(params->evict_fill_queue.elements, 0, sizeof(cache_obj_t*) * params->evict_slots);
-
-    /* XXX declare all the stats we are keeping */
-
+    params->eviction_trigger = 95; /* default eviction trigger in WiredTiger */
+    params->cache_size = ccache_params.cache_size;
     cache->eviction_params = params;
     srand(time(NULL));
 
@@ -277,7 +285,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
  * because the eviction logic cannot be decoupled from finding eviction
  * candidate, so use assert(false) if you cannot support this function
  *
- * @param cache the cache
+ * @param cache
  * @return the object to be evicted
  */
 static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
@@ -301,7 +309,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
     INFO("WT_evict: \n");
 
-    /* The walk function will return without filling if the evict queue is full */
+    __evict_update_work(cache);
     __evict_lru_walk(cache);
     __evict_lru_pages(cache);
 
@@ -347,7 +355,7 @@ __btree_bytes_evictable(WT_params_t *params)
 static inline uint64_t
 __btree_cache_bytes_inuse(WT_params_t *params)
 {
-    return params->cache_inmem_bytes * (100 + WT_CACHE_OVERHEAD_PCT) / 100;
+    return params->cache_inmem_bytes + (params->cache_inmem_bytes * WT_CACHE_OVERHEAD_PCT) / 100;
 }
 
 /*
@@ -1157,6 +1165,32 @@ __evict_queue_empty(WT_evict_queue *queue) {
 static inline bool
 __evict_queue_full(WT_evict_queue *queue) {
     return (queue->evict_current == 0 && queue->evict_candidates != 0);
+}
+
+static inline bool
+__eviction_clean_needed(const cache_t *cache) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    uint64_t bytes_inuse, bytes_max;
+
+    return (bytes_inuse > (params->eviction_trigger * bytes_max) / 100);
+}
+
+/*
+ * WiredTiger eviction sets a bunch of flags for dirty pages.
+ * We don't emulate updates, so for now we only deal with the flags
+ * relevant for clean pages.
+ */
+static bool
+__evict_update_work(const cache_t *cache) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    uint64_t bytes_inuse, bytes_max;
+
+    bytes_max = params->cache_size + 1;
+    bytes_inuse = __btree_cache_bytes_inuse(params);
+    if (bytes_inuse > (params->eviction_trigger * bytes_max) / 100)
+        FLAG_SET(params->evict_flags, WT_CACHE_EVICT_CLEAN_HARD);
+    else if (bytes_inuse > (params->eviction_target * bytes_max) / 100)
+        FLAG_SET(params->evict_flags, WT_CACHE_EVICT_CLEAN);
 }
 
 /* XXX -- fix that!!! */
