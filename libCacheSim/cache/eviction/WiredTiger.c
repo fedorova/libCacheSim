@@ -148,7 +148,7 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
  */
 static void WT_free(cache_t *cache)
 {
-    /* XXX -- Walk the tree and free all objects */
+    /* TODO -- Walk the tree and free all objects */
     cache_struct_free(cache);
 }
 
@@ -399,10 +399,9 @@ __evict_lru_walk(const cache_t *cache)
     /*
      * If the queue we are filling is empty, pages are being requested faster than they are being
      * queued.
-     * XXX: set evict_flags.
      */
     if (__evict_queue_empty(queue)) {
-        if (params->evict_flags == WT_CACHE_EVICT_HARD)
+        if (FLAG_ISSET(params->evict_flags, WT_CACHE_EVICT_HARD))
             params->evict_empty_score =
                 MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
         params->cache_eviction_queue_empty++;
@@ -416,8 +415,7 @@ __evict_lru_walk(const cache_t *cache)
      * no entries beyond WT_EVICT_WALK_BASE.
      */
     ret = __evict_walk(cache, queue);
-
-    /* XXX -- check the return value here */
+    (void) ret; /* No need to check for now. */
 
     /*
      * Sort the evict queue and set the number of non-empty elements
@@ -789,7 +787,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          *
          * TODO: Add dead tree checking when we get there.
          *
-         * XXX: Figure out if an internal page is empty if it has no cached children,
+         * TODO: Figure out if an internal page is empty if it has no cached children,
          * or if it must have no children at all to be considered empty.
          * For now we can't have empty leaf pages, because we do not support workloads
          * that delete data.
@@ -851,7 +849,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
      * At the time of the writing the above is not relevant to us, because we are only supporting
      * a single tree, so if we have to evict we must walk that tree.
      *
-     * XXX -- not sure if I need to track the evict walk period given that we are supporting
+     * TODO -- not sure if I need to track the evict walk period given that we are supporting
      * a single tree. Keep it for now.
      */
     if (pages_queued < target_pages / 2)
@@ -935,6 +933,13 @@ __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
      */
     cache_params->cache_inmem_bytes += obj->obj_size;
     cache_params->btree_inmem_bytes += obj->obj_size;
+    if (read_gen != WT_READGEN_NOTSET) {
+        if (cache_params->read_gen_oldest == WT_READGEN_NOTSET ||
+            read_gen < cache_params->read_gen_oldest)
+            cache_params->read_gen_oldest = read_gen;
+    }
+    if (read_gen > cache_params->read_gen)
+        cache_params->read_gen = read_gen;
     return 0;
 }
 
@@ -1193,10 +1198,11 @@ __evict_update_work(const cache_t *cache) {
         FLAG_SET(params->evict_flags, WT_CACHE_EVICT_CLEAN);
 }
 
-/* XXX -- fix that!!! */
 static uint64_t
 __btree_readgen_new(const cache_t *cache) {
-    return WT_THOUSAND;
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+    return (params->read_gen + params->read_gen_oldest) / 2;
 }
 
 #ifdef __cplusplus

@@ -82,6 +82,7 @@ typedef struct {
     uint64_t evict_walk_period;
     uint32_t evict_walk_progress;
     uint32_t evict_walk_target;
+    uint64_t read_gen;
     uint64_t read_gen_oldest;
     uint64_t splitmempage;
 } WT_params_t;
