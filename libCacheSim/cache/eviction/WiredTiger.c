@@ -15,7 +15,7 @@
 
 /* WiredTiger eviction constants */
 #define WT_CACHE_OVERHEAD_PCT 8 /* the default, can be changed via connection config */
-#define WT_CACHE_EVICT_HARD 1 /* XXX check when we use this flag */
+#define WT_CACHE_EVICT_HARD 1
 #define WT_EVICT_SCORE_BUMP 10
 #define WT_EVICT_SCORE_MAX 100
 #define WT_EVICT_WALK_BASE 300
@@ -47,6 +47,8 @@ typedef enum { /* Start position for eviction walk */
 #define WT_NOTFOUND  3
 
 #define WT_READGEN_OLDEST 1
+
+#define WT_MAX_MEMPAGE 32768 /* Default value for max leaf page size */
 
 /* These flags must be powers of two -- so we have binary numbers with a single bit set. */
 #define WT_CACHE_EVICT_CLEAN 1 << 0
@@ -135,6 +137,7 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     memset(params->evict_fill_queue.elements, 0, sizeof(cache_obj_t*) * params->evict_slots);
     params->eviction_trigger = 95; /* default eviction trigger in WiredTiger */
     params->cache_size = ccache_params.cache_size;
+    params->splitmempage = 8 * WT_MAX_MEMPAGE / 10;
     cache->eviction_params = params;
     srand(time(NULL));
 
@@ -880,7 +883,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
         } else
             while (ref != NULL && ref->wt_page.read_gen == WT_READGEN_OLDEST)
                 ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags);
-        params->evict_ref = ref; /* XXX -- check why we set that */
+        params->evict_ref = ref;
     }
 
     params->cache_eviction_walk += refs_walked;
@@ -1098,7 +1101,7 @@ __evict_priority(const cache_t *cache, cache_obj_t *ref) {
     /* TODO: We are not supporting deletions yet, so this is for the future. */
 
     /* Any large page in memory is likewise a good choice. */
-    if (ref->obj_size > params->splitmempage) /* XXX set that */
+    if (ref->obj_size > params->splitmempage)
         return (WT_READGEN_OLDEST);
 
     /*
@@ -1107,7 +1110,7 @@ __evict_priority(const cache_t *cache, cache_obj_t *ref) {
      */
     read_gen = ref->wt_page.read_gen;
 
-    read_gen += params->evict_priority; /* XXX set that */
+    read_gen += params->evict_priority; /* Think this is only set for bloom and metadata cursors. */
 
 #define WT_EVICT_INTL_SKEW WT_THOUSAND
     if (ref->wt_page.page_type == WT_INTERNAL)
