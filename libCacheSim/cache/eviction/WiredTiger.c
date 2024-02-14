@@ -384,7 +384,8 @@ __evict_lru_walk(const cache_t *cache)
     u_int candidates, entries;
     uint64_t read_gen_oldest;
 
-    INFO("__evict_lru_walk\n");
+    INFO("__evict_lru_walk");
+
     if (params->evict_empty_score > 0)
         params->evict_empty_score--;
 
@@ -409,7 +410,7 @@ __evict_lru_walk(const cache_t *cache)
             params->evict_empty_score =
                 MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
         params->cache_eviction_queue_empty++;
-        INFO("__evict_lru_walk: queue empty\n");
+        INFO("__evict_lru_walk: queue empty");
     } else
         params->cache_eviction_queue_not_empty++;
 
