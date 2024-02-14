@@ -384,6 +384,7 @@ __evict_lru_walk(const cache_t *cache)
     u_int candidates, entries;
     uint64_t read_gen_oldest;
 
+    INFO("__evict_lru_walk\n");
     if (params->evict_empty_score > 0)
         params->evict_empty_score--;
 
@@ -408,6 +409,7 @@ __evict_lru_walk(const cache_t *cache)
             params->evict_empty_score =
                 MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
         params->cache_eviction_queue_empty++;
+        INFO("__evict_lru_walk: queue empty\n");
     } else
         params->cache_eviction_queue_not_empty++;
 
@@ -423,6 +425,7 @@ __evict_lru_walk(const cache_t *cache)
     /*
      * Sort the evict queue and set the number of non-empty elements
      */
+    INFO("__evict_lru_walk: sorting the queue\n");
     qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __evict_qsort_compare);
     entries = queue->evict_entries;
 
@@ -431,9 +434,11 @@ __evict_lru_walk(const cache_t *cache)
      * figuring out how many of the entries are candidates so we never end up with more candidates
      * than entries.
      */
+    INFO("__evict_lru_walk: clearing unneeded entries from a queue with %d entries\n", entries);
     while (entries > WT_EVICT_WALK_BASE)
         queue->elements[--entries] = NULL;
     queue->evict_entries = entries;
+    INFO("__evict_lru_walk: ended up with %d entries after clearing\n", entries);
 
     if (entries == 0) {
         /*
@@ -442,6 +447,7 @@ __evict_lru_walk(const cache_t *cache)
          */
         queue->evict_candidates = 0;
         queue->evict_current = -1;
+        INFO("__evict_lru_walk: zero entries. Set evict_current to -1\n");
     }
     if (params->evict_aggressive)
         queue->evict_candidates = entries;
@@ -457,6 +463,7 @@ __evict_lru_walk(const cache_t *cache)
             if (!WT_READGEN_EVICT_SOON(read_gen_oldest))
                 break;
         }
+        INFO("__evict_lru_walk: gathered %d candidates out of %d entries. Oldest generation observed: %lu\n", read_gen_oldest);
 
         /*
          * Take all candidates if we only gathered pages with an oldest
@@ -482,6 +489,8 @@ __evict_lru_walk(const cache_t *cache)
             queue->evict_candidates = 1 + candidates + ((entries - candidates) - 1) / 3;
             params->read_gen_oldest = read_gen_oldest;
         }
+        INFO("__evict_lru_walk: ended up with %d evict_candidates. Set read_gen_oldest to %lu\n",
+             queue->evict_candidates, read_gen_oldest);
     }
     params->cache_eviction_pages_queued_post_lru += queue->evict_candidates;
     queue->evict_current = 0;
@@ -506,6 +515,8 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
     start_slot = slot = queue->evict_entries; /* first available evict entry */
     max_entries = MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
 
+    INFO("__evict walk: starting at slot %d with %d max entries\n", slot, max_entries);
+
   retry:
     while (slot < max_entries)
         __evict_walk_tree(cache, queue, max_entries, &slot);
@@ -519,6 +530,7 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
          (retries < WT_RETRY_MAX && (slot == queue->evict_entries || slot > start_slot)))) {
         start_slot = slot;
         ++retries;
+        INFO("__evict walk: will retry walk with %d slot, %d retries\n", slot, retries);
         goto retry;
     }
 
@@ -528,6 +540,7 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
     if (queue->evict_entries == slot)
         ret = -1;
 
+    INFO("__evict walk: old evict_entries = %d, new evict_entries = %d\n", queue->evict_entries, slot);
     queue->evict_entries = slot;
     return (ret);
 }
@@ -647,6 +660,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     last_parent = NULL;
     restarts = 0;
 
+    INFO("__evict_walk_tree: to begin filling queue at slot %d\n", *slotp);
     /*
      * Figure out how many slots to fill from this tree. Note that some care is taken in the
      * calculation to avoid overflow.
@@ -657,6 +671,8 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
         params->evict_walk_target = __evict_walk_target(cache);
         params->evict_walk_progress = 0;
     }
+    INFO("__evict_walk_tree: target is %d, progress is %d, target pages is %d\n",
+         params->evict_walk_target, params->evict_walk_progress, target_pages);
     target_pages = params->evict_walk_target - params->evict_walk_progress;
 
     if (target_pages > remaining_slots)
