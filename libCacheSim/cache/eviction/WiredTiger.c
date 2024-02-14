@@ -75,6 +75,7 @@ static void WT_print_cache(const cache_t *cache);
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type,
                              cache_obj_t *parent_obj, int read_gen);
+static void __btree_node_index_slot(cache_obj_t *obj, Map *children, int *slotp);
 static char * __btree_page_to_string(cache_obj_t *obj);
 static void __btree_print(const cache_t *cache);
 static cache_obj_t * __btree_random_descent(const cache_t *cache);
@@ -98,7 +99,8 @@ static bool __evict_queue_empty(WT_evict_queue *queue);
 static bool __evict_queue_full(WT_evict_queue *queue);
 static int __evict_walk(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk_target(const cache_t *cache);
-static int __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries, u_int *slotp);
+static int __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries,
+                             u_int *slotp);
     static bool __evict_update_work(const cache_t *cache);
 
 /**
@@ -132,7 +134,8 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     WT_params_t *params = (WT_params_t *)malloc(sizeof(WT_params_t));
     memset(params, 0, sizeof(WT_params_t));
     params->evict_slots = WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR;
-    if ((params->evict_fill_queue.elements = malloc(sizeof(cache_obj_t*) * params->evict_slots)) == NULL)
+    if ((params->evict_fill_queue.elements =
+         malloc(sizeof(cache_obj_t*) * params->evict_slots)) == NULL)
         return NULL;
     memset(params->evict_fill_queue.elements, 0, sizeof(cache_obj_t*) * params->evict_slots);
     params->eviction_trigger = 95; /* default eviction trigger in WiredTiger */
@@ -241,7 +244,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
          */
         if (req->parent_addr == 0) { /* Root is the only node with parent address zero. */
             params->BTree_root = obj;
-            if (__btree_init_page(obj, params, WT_ROOT, NULL /* parent page */, 0 /* read gen */) != 0)
+            if (__btree_init_page(obj, params, WT_ROOT, NULL /* parent */, 0 /* read gen */) != 0)
                 return NULL;
             return obj;
         } else {
@@ -256,8 +259,8 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
     }
 
     if (req->parent_addr == 0) {
-        ERROR("Saw a new WiredTiger root record with root already present. Existing root address is %ld,"
-               "this root access has address %ld. We do not support more than one tree.\n",
+        ERROR("New root with root already present. Existing root address is %ld,"
+              "this root access has address %ld. We do not support more than one tree.\n",
                params->BTree_root->obj_id, obj->obj_id);
         return NULL;
     }
@@ -464,7 +467,8 @@ __evict_lru_walk(const cache_t *cache)
             if (!WT_READGEN_EVICT_SOON(read_gen_oldest))
                 break;
         }
-        INFO("__evict_lru_walk: gathered %d candidates out of %d entries. Oldest generation observed: %lu\n", read_gen_oldest);
+        INFO("__evict_lru_walk: gathered %d candidates out of %d entries."
+             "Oldest generation observed: %lu\n", read_gen_oldest);
 
         /*
          * Take all candidates if we only gathered pages with an oldest
@@ -541,7 +545,8 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
     if (queue->evict_entries == slot)
         ret = -1;
 
-    INFO("__evict walk: old evict_entries = %d, new evict_entries = %d\n", queue->evict_entries, slot);
+    INFO("__evict walk: old evict_entries = %d, new evict_entries = %d\n",
+         queue->evict_entries, slot);
     queue->evict_entries = slot;
     return (ret);
 }
@@ -575,8 +580,10 @@ __evict_walk_target(const cache_t *cache)
     bytes_per_slot = 1 + cache_inuse / params->evict_slots;
     target_pages = (uint32_t)((btree_inuse + bytes_per_slot / 2) / bytes_per_slot);
 
-    if (btree_inuse == 0)
+    if (btree_inuse == 0) {
+        INFO("Btree not in use. Setting evict target to zero.\n");
         return (0);
+    }
 
     /*
      * There is some cost associated with walking a tree. If we're going to visit this tree, always
@@ -585,7 +592,7 @@ __evict_walk_target(const cache_t *cache)
     if (target_pages < MIN_PAGES_PER_TREE)
         target_pages = MIN_PAGES_PER_TREE;
 
-    printf("__btree_evict_walk_target: returning %d target pages\n", target_pages);
+    INFO("__btree_evict_walk_target: returning %d target pages\n", target_pages);
     return (target_pages);
 }
 
@@ -603,8 +610,10 @@ static int
 
     node_orig = *nodep;
     *nodep = NULL;
+    slot = 0;
 
     if ((node = node_orig) == NULL) {
+        INFO("Starting walk from root\n");
         node = params->BTree_root;
         children = node->wt_page.children;
         if (getMapSize(children) == 0)
@@ -616,13 +625,19 @@ static int
     } else if (node->wt_page.page_type == WT_ROOT)
         return 0;
 
+    /* Figure out the current slot in the WT_REF array. */
+    __btree_node_index_slot(node, &children, &slot);
+
     for (;;) {
+        INFO("Walking the tree, iteration %d\n",  *walkcntp);
+
         *walkcntp++;
         DEBUG_ASSERT(children != NULL);
         node = getValueAtIndex(children, slot);
         if (node->wt_page.page_type == WT_LEAF) {
             *nodep = node;
             DEBUG_ASSERT(node != node_orig);
+            INFO("Returning leaf page %s\n", __btree_page_to_string(node));
             return 0;
         }
         /* We have an internal page */
@@ -632,6 +647,7 @@ static int
             /* This is an empty internal page. Prioritize for eviction and return. */
             node->wt_page.read_gen = WT_READGEN_OLDEST;
             *nodep = node;
+            INFO("Returning empty internal page %s\n", __btree_page_to_string(node));
             return 0;
         }
         if (walk_flags == WT_READ_PREV)
@@ -708,6 +724,12 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     /* We save the last point where we walked the tree. */
     ref = params->evict_ref;
     params->evict_ref = NULL;
+
+    if (ref == NULL)
+        INFO("__evict_walk_tree: starting with NULL reference\n");
+    else
+        INFO("__evict_walk_tree: starting with node %s\n",
+             __btree_page_to_string(ref));
 
     internal_pages_already_queued = internal_pages_queued = internal_pages_seen = 0;
     for (evict = start, pages_already_queued = pages_queued = pages_seen = refs_walked = 0;
@@ -935,6 +957,25 @@ __btree_find_parent(cache_obj_t *start, obj_id_t parent_id) {
     return NULL;
 }
 
+/*
+ * Find the node's slot id in its parent array.
+ */
+static void
+__btree_node_index_slot(cache_obj_t *obj, Map *children, int *slotp) {
+    cache_obj_t *parent;
+
+    DEBUG_ASSERT(node != NULL && node->wt_page.page_type != WT_ROOT);
+
+    parent = obj->wt_page.parent_page;
+    *children = parent->wt_page.children;
+
+    for (*slotp = 0; *slotp < getMapSize(*children); *slotp++)
+        if (obj == getValueAtIndex(*children, *slotp))
+            break;
+
+    DEBUG_ASSERT(*slotp < getMapSize(*children));
+}
+
 static int
 __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
                   cache_obj_t *parent_page, int read_gen) {
@@ -1027,6 +1068,8 @@ __btree_random_descent(const cache_t *cache)
 
     current_node = params->BTree_root;
 
+    INFO("__btree_random_descent");
+
     for (;;) {
         if (current_node->wt_page.page_type == WT_LEAF)
             break;
@@ -1061,7 +1104,8 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
     }
 
     DEBUG_ASSERT(removePair(obj->wt_page.parent_page->wt_page.children, obj->obj_id));
-    INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id, obj->wt_page.parent_page->obj_id,
+    INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id,
+         obj->wt_page.parent_page->obj_id,
          obj->wt_page.parent_page->wt_page.children);
 
     cache_evict_base((cache_t *)cache, obj, true);
@@ -1078,7 +1122,8 @@ char page_buffer[PAGE_PRINT_BUFFER_SIZE];
 static char *
 __btree_page_to_string(cache_obj_t *obj) {
 
-    snprintf((char*)&page_buffer, PAGE_PRINT_BUFFER_SIZE, "page %lu [%lu], %s, read-gen: %ld", obj->obj_id,
+    snprintf((char*)&page_buffer, PAGE_PRINT_BUFFER_SIZE,
+             "page %lu [%lu], %s, read-gen: %ld", obj->obj_id,
              (obj->wt_page.parent_page == NULL)?0:obj->wt_page.parent_page->obj_id,
              (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
              obj->wt_page.read_gen);
