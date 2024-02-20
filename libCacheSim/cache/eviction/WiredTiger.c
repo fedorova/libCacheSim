@@ -868,7 +868,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          * TODO: Add that later.
          */
         DEBUG_ASSERT(params->evict_ref == NULL);
-        DEBUG_ASSERT(*slot_p < max_entries);
+        DEBUG_ASSERT(*slotp < max_entries);
         printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp) + 1);
         queue->elements[*slotp++] = ref;
         ref->wt_page.evict_score = __evict_priority(cache, ref);
@@ -961,16 +961,16 @@ __btree_find_parent(cache_obj_t *start, obj_id_t parent_id) {
  * Find the node's slot id in its parent array.
  */
 static void
-__btree_node_index_slot(cache_obj_t *obj, Map *children, int *slotp) {
+__btree_node_index_slot(cache_obj_t *node, Map *children, int *slotp) {
     cache_obj_t *parent;
 
     DEBUG_ASSERT(node != NULL && node->wt_page.page_type != WT_ROOT);
 
-    parent = obj->wt_page.parent_page;
+    parent = node->wt_page.parent_page;
     *children = parent->wt_page.children;
 
     for (*slotp = 0; *slotp < getMapSize(*children); *slotp++)
-        if (obj == getValueAtIndex(*children, *slotp))
+        if (node == getValueAtIndex(*children, *slotp))
             break;
 
     DEBUG_ASSERT(*slotp < getMapSize(*children));
