@@ -50,6 +50,8 @@ typedef struct {
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
     uint64_t btree_inmem_bytes;
+    uint64_t btree_internal_pages;
+    uint64_t btree_total_pages;
     uint64_t cache_eviction_internal_pages_already_queued;
     uint64_t cache_eviction_internal_pages_queued;
     uint64_t cache_eviction_internal_pages_seen;

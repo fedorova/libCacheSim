@@ -523,8 +523,10 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
     INFO("__evict walk: starting at slot %d with %d max entries\n", slot, max_entries);
 
   retry:
-    while (slot < max_entries)
+    while (slot < max_entries) {
+        INFO("evict_walk: calling __evict_walk_tree in a loop\n");
         __evict_walk_tree(cache, queue, max_entries, &slot);
+    }
 
     /*
      * Repeat the walks a few times if we don't find enough pages. Give up when we have some
@@ -622,6 +624,7 @@ static int
             slot = getMapSize(children) - 1;
         else
             slot = 0;
+        goto descend;
     } else if (node->wt_page.page_type == WT_ROOT)
         return 0;
 
@@ -632,6 +635,8 @@ static int
         INFO("Walking the tree, iteration %d\n",  *walkcntp);
 
         *walkcntp++;
+
+      descend:
         DEBUG_ASSERT(children != NULL);
         node = getValueAtIndex(children, slot);
         if (node->wt_page.page_type == WT_LEAF) {
@@ -675,7 +680,9 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
 
     give_up = false;
     last_parent = NULL;
+    ref = NULL;
     restarts = 0;
+    ret = 0;
 
     INFO("__evict_walk_tree: to begin filling queue at slot %d\n", *slotp);
     /*
@@ -746,6 +753,9 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          */
         give_up = pages_seen > min_pages &&
           (pages_queued == 0 || (pages_seen / pages_queued) > (min_pages / target_pages));
+
+        INFO("evict_walk_tree: after __btree_tree_walk_count: give_up = %d, ref = %p\n",
+             give_up, ref);
         if (give_up) {
             switch (params->evict_start_type) {
             case WT_EVICT_WALK_NEXT:
@@ -877,6 +887,8 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
         ++pages_queued;
         ++params->evict_walk_progress;
 
+        INFO("__evict_walk_tree: slot=%d, pages_queued = %ld\n", *slotp, pages_queued);
+
         /* Count internal pages queued. */
         if (ref->wt_page.page_type == WT_INTERNAL)
             internal_pages_queued++;
@@ -1001,6 +1013,10 @@ __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
     }
     if (read_gen > cache_params->read_gen)
         cache_params->read_gen = read_gen;
+
+    cache_params->btree_total_pages++;
+    if (page_type != WT_LEAF)
+        cache_params->btree_internal_pages++;
     return 0;
 }
 
