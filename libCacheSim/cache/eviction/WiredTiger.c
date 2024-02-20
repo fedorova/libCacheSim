@@ -468,7 +468,7 @@ __evict_lru_walk(const cache_t *cache)
                 break;
         }
         INFO("__evict_lru_walk: gathered %d candidates out of %d entries."
-             "Oldest generation observed: %lu\n", read_gen_oldest);
+             "Oldest generation observed: %lu\n", candidates, entries, read_gen_oldest);
 
         /*
          * Take all candidates if we only gathered pages with an oldest
