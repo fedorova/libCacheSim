@@ -614,6 +614,11 @@ static int
     *nodep = NULL;
     slot = 0;
 
+    if (node_orig == NULL)
+        INFO("Original node is NULL\n");
+    else
+        INFO("Original node is %s\n", __btree_page_to_string(node_orig));
+
     if ((node = node_orig) == NULL) {
         INFO("Starting walk from root\n");
         node = params->BTree_root;
@@ -631,6 +636,17 @@ static int
     /* Figure out the current slot in the WT_REF array. */
     __btree_node_index_slot(node, &children, &slot);
 
+    /* If we are at the edge of the page, ascend to parent -- XXX */
+    while ((prev && slot == 0) ||
+           (!prev && slot == getMapSize(__btree_node_parent(node)->wt_page.children)- 1)) {
+        
+
+    /* Otherwise increment or decrement the slot -- XXX */
+    if (prev)
+        --slot;
+    else
+        ++slot;
+
     for (;;) {
         INFO("Walking the tree, iteration %d\n",  *walkcntp);
 
@@ -638,6 +654,7 @@ static int
 
       descend:
         DEBUG_ASSERT(children != NULL);
+        INFO("Using slot %d in parent %s\n", slot, __btree_page_to_string(node));
         node = getValueAtIndex(children, slot);
         if (node->wt_page.page_type == WT_LEAF) {
             *nodep = node;
@@ -741,7 +758,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     internal_pages_already_queued = internal_pages_queued = internal_pages_seen = 0;
     for (evict = start, pages_already_queued = pages_queued = pages_seen = refs_walked = 0;
          evict < end && ret == 0;
-         last_parent = ref == NULL ? NULL : ref->wt_page.parent_page,
+         last_parent = (ref == NULL ? NULL : ref->wt_page.parent_page),
              ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags)) {
         /*
          * Below are a bunch of conditions deciding whether we should queue this page for
@@ -967,6 +984,10 @@ __btree_find_parent(cache_obj_t *start, obj_id_t parent_id) {
             return found_node;
     }
     return NULL;
+}
+
+static cache_obj_t * __btree_node_parent(cache_obj_t *node) {
+    return node->wt_page.parent_page;
 }
 
 /*
