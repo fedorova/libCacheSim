@@ -651,19 +651,18 @@ static void
         node = __btree_node_parent(node);
         /* Find the children map containing the new node and its slot in that map */
         __btree_node_index_slot(node, &children, &slot);
-    }
 
-    /* We never evict the root page for now */
-    if (node->wt_page.page_type == WT_ROOT)
+        /* We never evict the root page for now */
+        if (node->wt_page.page_type == WT_ROOT)
+            return;
+
+        if ((node->wt_page.page_type == WT_INTERNAL) && (getMapSize(node->wt_page.children) == 0))
+            __evict_page_soon(node);
+
+        *nodep = node;
+        DEBUG_ASSERT(node != node_orig);
         return;
-
-    if ((node->wt_page.page_type == WT_INTERNAL) && (getMapSize(node->wt_page.children) == 0))
-        __evict_page_soon(node);
-
-    /* Optionally skip internal pages */
-    *nodep = node;
-    DEBUG_ASSERT(node != node_orig);
-    return;
+    }
 
     /* Otherwise increment or decrement the slot */
     if (prev) --slot;
@@ -920,10 +919,11 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          * Next, the WiredTiger code checks the transaction state of the page.
          * TODO: Add that later.
          */
+        INFO("About to add to queue at slot %d with max entries %d\n", *slotp, max_entries);
         DEBUG_ASSERT(params->evict_ref == NULL);
         DEBUG_ASSERT(*slotp < max_entries);
-        printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp) + 1);
-        queue->elements[*slotp++] = ref;
+        printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp));
+        queue->elements[(*slotp)++] = ref;
         ref->wt_page.evict_score = __evict_priority(cache, ref);
         ref->wt_page.evict_flags = WT_PAGE_EVICT_LRU;
         ++evict;
