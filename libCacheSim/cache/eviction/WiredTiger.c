@@ -76,12 +76,13 @@ static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type,
                              cache_obj_t *parent_obj, int read_gen);
 static void __btree_node_index_slot(cache_obj_t *obj, Map *children, int *slotp);
+static inline cache_obj_t * __btree_node_parent(cache_obj_t *node);
 static char * __btree_page_to_string(cache_obj_t *obj);
 static void __btree_print(const cache_t *cache);
 static cache_obj_t * __btree_random_descent(const cache_t *cache);
 static uint64_t __btree_readgen_new(const cache_t *cache);
 static void __btree_remove(const cache_t *cache, cache_obj_t *obj);
-static int __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
+static void __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
                                    int walk_flags);
 
 #define FLAG_SET(memory, value) (memory |= value)
@@ -94,6 +95,7 @@ static int __evict_lru_walk(const cache_t *cache);
 static int __evict_qsort_compare(const void *a, const void *b);
 static inline bool ___evict_queue_empty(WT_evict_queue *queue);
 static inline bool __evict_queue_full(WT_evict_queue *queue);
+static inline void __evict_page_soon(cache_obj_t *obj);
 static uint64_t __evict_priority(const cache_t *cache, cache_obj_t *score);
 static bool __evict_queue_empty(WT_evict_queue *queue);
 static bool __evict_queue_full(WT_evict_queue *queue);
@@ -602,17 +604,19 @@ __evict_walk_target(const cache_t *cache)
  * WiredTiger's __tree_walk_internal --
  *     Move to the next/previous page in the tree.
  */
-static int
+static void
  __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp, int walk_flags)
 {
     cache_obj_t *node, *node_orig;
     Map children = NULL;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    int slot;
+    int slot, prev;
 
     node_orig = *nodep;
     *nodep = NULL;
     slot = 0;
+
+    prev = (walk_flags == WT_READ_PREV)?1:0;
 
     if (node_orig == NULL)
         INFO("Original node is NULL\n");
@@ -624,55 +628,77 @@ static int
         node = params->BTree_root;
         children = node->wt_page.children;
         if (getMapSize(children) == 0)
-            return 0;
-        else if (walk_flags == WT_READ_PREV)
+            return;
+        else if (prev)
             slot = getMapSize(children) - 1;
         else
             slot = 0;
         goto descend;
     } else if (node->wt_page.page_type == WT_ROOT)
-        return 0;
+        return;
 
     /* Figure out the current slot in the WT_REF array. */
     __btree_node_index_slot(node, &children, &slot);
 
-    /* If we are at the edge of the page, ascend to parent -- XXX */
+    INFO("Index slot is %d for page %s in map of size %ld \n",
+         slot, __btree_page_to_string(node), getMapSize(children));
+
+    /* If we are at the edge of the page, ascend to parent */
     while ((prev && slot == 0) ||
            (!prev && slot == getMapSize(__btree_node_parent(node)->wt_page.children)- 1)) {
-        
+        printf("Ascending to parent\n");
+        /* Get the parent */
+        node = __btree_node_parent(node);
+        /* Find the children map containing the new node and its slot in that map */
+        __btree_node_index_slot(node, &children, &slot);
+    }
 
-    /* Otherwise increment or decrement the slot -- XXX */
-    if (prev)
-        --slot;
-    else
-        ++slot;
+    /* We never evict the root page for now */
+    if (node->wt_page.page_type == WT_ROOT)
+        return;
+
+    if ((node->wt_page.page_type == WT_INTERNAL) && (getMapSize(node->wt_page.children) == 0))
+        __evict_page_soon(node);
+
+    /* Optionally skip internal pages */
+    *nodep = node;
+    DEBUG_ASSERT(node != node_orig);
+    return;
+
+    /* Otherwise increment or decrement the slot */
+    if (prev) --slot;
+    else ++slot;
+
+    if (walkcntp != NULL)
+        ++*walkcntp;
+    INFO("Walking the tree, iteration %d\n",  *walkcntp);
 
     for (;;) {
-        INFO("Walking the tree, iteration %d\n",  *walkcntp);
-
-        *walkcntp++;
-
       descend:
         DEBUG_ASSERT(children != NULL);
         INFO("Using slot %d in parent %s\n", slot, __btree_page_to_string(node));
+
         node = getValueAtIndex(children, slot);
+
         if (node->wt_page.page_type == WT_LEAF) {
             *nodep = node;
             DEBUG_ASSERT(node != node_orig);
             INFO("Returning leaf page %s\n", __btree_page_to_string(node));
-            return 0;
+            return;
         }
+
         /* We have an internal page */
         children = node->wt_page.children;
+
         /* The internal page is empty */
         if (getMapSize(children) == 0) {
             /* This is an empty internal page. Prioritize for eviction and return. */
-            node->wt_page.read_gen = WT_READGEN_OLDEST;
+            __evict_page_soon(node);
             *nodep = node;
             INFO("Returning empty internal page %s\n", __btree_page_to_string(node));
-            return 0;
+            return;
         }
-        if (walk_flags == WT_READ_PREV)
+        if (prev)
             slot = getMapSize(children) - 1;
         else
             slot = 0;
@@ -759,7 +785,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     for (evict = start, pages_already_queued = pages_queued = pages_seen = refs_walked = 0;
          evict < end && ret == 0;
          last_parent = (ref == NULL ? NULL : ref->wt_page.parent_page),
-             ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags)) {
+             __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags)) {
         /*
          * Below are a bunch of conditions deciding whether we should queue this page for
          * eviction and whether we should keep walking the tree.
@@ -950,7 +976,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
             ref = NULL;
         } else
             while (ref != NULL && ref->wt_page.read_gen == WT_READGEN_OLDEST)
-                ret = __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags);
+                __btree_tree_walk_count(cache, &ref, &refs_walked, walk_flags);
         params->evict_ref = ref;
     }
 
@@ -986,7 +1012,8 @@ __btree_find_parent(cache_obj_t *start, obj_id_t parent_id) {
     return NULL;
 }
 
-static cache_obj_t * __btree_node_parent(cache_obj_t *node) {
+static inline cache_obj_t *
+__btree_node_parent(cache_obj_t *node) {
     return node->wt_page.parent_page;
 }
 
@@ -1305,6 +1332,10 @@ __btree_readgen_new(const cache_t *cache) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
     return (params->read_gen + params->read_gen_oldest) / 2;
+}
+
+static inline void __evict_page_soon(cache_obj_t *obj) {
+    obj->wt_page.read_gen = WT_READGEN_OLDEST;
 }
 
 #ifdef __cplusplus
