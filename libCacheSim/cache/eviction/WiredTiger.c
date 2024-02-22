@@ -646,15 +646,16 @@ static void
     /* If we are at the edge of the page, ascend to parent */
     while ((prev && slot == 0) ||
            (!prev && slot == getMapSize(__btree_node_parent(node)->wt_page.children)- 1)) {
-        printf("Ascending to parent\n");
+
         /* Get the parent */
         node = __btree_node_parent(node);
-        /* Find the children map containing the new node and its slot in that map */
-        __btree_node_index_slot(node, &children, &slot);
 
         /* We never evict the root page for now */
         if (node->wt_page.page_type == WT_ROOT)
             return;
+
+        /* Find the children map containing the new node and the node's slot in that map */
+        __btree_node_index_slot(node, &children, &slot);
 
         if ((node->wt_page.page_type == WT_INTERNAL) && (getMapSize(node->wt_page.children) == 0))
             __evict_page_soon(node);
@@ -1024,15 +1025,20 @@ static void
 __btree_node_index_slot(cache_obj_t *node, Map *children, int *slotp) {
     cache_obj_t *parent;
 
+    if (node != NULL)
+        printf("Index slot lookup for %s.\n", __btree_page_to_string(node));
+
     DEBUG_ASSERT(node != NULL && node->wt_page.page_type != WT_ROOT);
 
     parent = node->wt_page.parent_page;
     *children = parent->wt_page.children;
 
-    for (*slotp = 0; *slotp < getMapSize(*children); *slotp++)
+    for (*slotp = 0; *slotp < getMapSize(*children); (*slotp)++)
         if (node == getValueAtIndex(*children, *slotp))
             break;
 
+    printf("Index slot lookup for %s. slot = %d, map size = %d\n",
+           __btree_page_to_string(node), *slotp, getMapSize(*children));
     DEBUG_ASSERT(*slotp < getMapSize(*children));
 }
 
