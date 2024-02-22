@@ -90,7 +90,7 @@ static void __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, i
 #define FLAG_CLEAR(memory, value) (((memory) &= ~(value)))
 
 /* Eviction */
-static void __evict_lru_pages(const cache_t *cache);
+static int __evict_lru_pages(const cache_t *cache);
 static int __evict_lru_walk(const cache_t *cache);
 static int __evict_qsort_compare(const void *a, const void *b);
 static inline bool ___evict_queue_empty(WT_evict_queue *queue);
@@ -317,11 +317,23 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
     INFO("WT_evict: \n");
 
-    __evict_update_work(cache);
-    __evict_lru_walk(cache);
-    __evict_lru_pages(cache);
+     /*
+      * Increment the shared read generation. Do this occasionally even if eviction is not
+      * currently required, so that pages have some relative read generation when the eviction
+      * server does need to do some work.
+      */
+    params->read_gen++;
 
-    __btree_print(cache);
+    __evict_update_work(cache);
+    /* Under what conditions does the eviction server keep evicting? XXX */
+    __evict_lru_walk(cache);
+
+    /* Keep evicting pages until there's something left in queues. */
+    while (__evict_lru_pages(cache) == 0)
+        __btree_print(cache);
+
+    INFO("Evict queue empty\n");
+
 }
 
 /**
@@ -1025,9 +1037,6 @@ static void
 __btree_node_index_slot(cache_obj_t *node, Map *children, int *slotp) {
     cache_obj_t *parent;
 
-    if (node != NULL)
-        printf("Index slot lookup for %s.\n", __btree_page_to_string(node));
-
     DEBUG_ASSERT(node != NULL && node->wt_page.page_type != WT_ROOT);
 
     parent = node->wt_page.parent_page;
@@ -1037,8 +1046,6 @@ __btree_node_index_slot(cache_obj_t *node, Map *children, int *slotp) {
         if (node == getValueAtIndex(*children, *slotp))
             break;
 
-    printf("Index slot lookup for %s. slot = %d, map size = %d\n",
-           __btree_page_to_string(node), *slotp, getMapSize(*children));
     DEBUG_ASSERT(*slotp < getMapSize(*children));
 }
 
@@ -1168,6 +1175,8 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
         return;
     }
     else if (obj->wt_page.page_type == WT_INTERNAL) {
+        if (getMapSize(obj->wt_page.children) > 0)
+            WARN("Removing internal page with children: %s\n", __btree_page_to_string(obj));
         for (i = 0; i < getMapSize(obj->wt_page.children); i++)
             __btree_remove(cache, getValueAtIndex(obj->wt_page.children, i));
         deleteMap(obj->wt_page.children);
@@ -1256,7 +1265,7 @@ __evict_priority(const cache_t *cache, cache_obj_t *ref) {
  * Here we are single threaded and not supporting updates for now, so this shouldn't
  * happen. So we are just executing the logic of __evict_page here.
  */
-static void
+static int
 __evict_lru_pages(const cache_t *cache) {
     cache_obj_t *evict_victim;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
@@ -1266,6 +1275,9 @@ __evict_lru_pages(const cache_t *cache) {
 
     /* We assume for now that there is only one queue */
     queue = &params->evict_fill_queue;
+
+    if (__evict_queue_empty(queue))
+        return -1;
 
     /*
      * Get the page at the queue's evict_current position.
@@ -1289,6 +1301,8 @@ __evict_lru_pages(const cache_t *cache) {
 
     if (++queue->evict_current >= queue->evict_candidates)
         queue->evict_current = -1;
+
+    return 0;
 }
 
 
