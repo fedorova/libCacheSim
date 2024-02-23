@@ -440,12 +440,18 @@ __evict_lru_walk(const cache_t *cache)
     ret = __evict_walk(cache, queue);
     (void) ret; /* No need to check for now. */
 
+    for (int i = 0; i < queue->evict_entries; i++)
+        printf("el[%d]: %p\n", i, queue->elements[i]);
     /*
      * Sort the evict queue and set the number of non-empty elements
      */
     INFO("__evict_lru_walk: sorting the queue\n");
+
     qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __evict_qsort_compare);
     entries = queue->evict_entries;
+
+    for (int i = 0; i < queue->evict_entries; i++)
+        printf("el[%d]: %p\n", i, queue->elements[i]);
 
     /*
      * If we have more entries than the maximum tracked between walks, clear them. Do this before
@@ -1219,10 +1225,13 @@ __evict_qsort_compare(const void *a_arg, const void *b_arg) {
     const cache_obj_t *a, *b;
     uint64_t a_score, b_score;
 
-    a = (cache_obj_t *)a_arg;
-    b = (cache_obj_t *)b_arg;
+    a = *(cache_obj_t **)a_arg;
+    b = *(cache_obj_t **)b_arg;
     a_score = (a == NULL ? UINT64_MAX : a->wt_page.evict_score);
     b_score = (b == NULL ? UINT64_MAX : b->wt_page.evict_score);
+
+    printf("a = %p, b = %p, a_score = %lu, b_score = %lu\n", a, b, a_score, b_score);
+    printf("returning %d\n", ((a_score < b_score) ? -1 : (a_score == b_score) ? 0 : 1));
 
     return ((a_score < b_score) ? -1 : (a_score == b_score) ? 0 : 1);
 }
