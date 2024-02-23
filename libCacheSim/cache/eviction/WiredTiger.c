@@ -1111,10 +1111,11 @@ __btree_print_node(cache_obj_t *node, int times)
 static void
 __btree_print(const cache_t *cache){
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-
+#if 0
     printf("BEGIN ----------------------------------------\n");
     __btree_print_node(params->BTree_root, 0);
     printf("\nEND ----------------------------------------\n");
+#endif
 }
 
 /*
