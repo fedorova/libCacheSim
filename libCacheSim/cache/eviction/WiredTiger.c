@@ -209,8 +209,16 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     INFO("WT_find: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d\n",
            req->obj_id, req->parent_addr, req->read_gen, req->page_type);
 
-    if (cache_obj != NULL && !cache_obj->wt_page.in_tree)
-        ERROR("Cached WiredTiger object not in tree\n");
+    if (cache_obj != NULL) {
+        if (!cache_obj->wt_page.in_tree || cache_obj->wt_page.page_type != req->page_type
+            || cache_obj->wt_page.parent_page->obj_id != req->parent_addr) {
+            ERROR("Cached WiredTiger object changed essential properties.\n");
+        }
+        else if (cache_obj->wt_page.read_gen != req->read_gen) {
+            cache_obj->wt_page.read_gen = req->read_gen;
+            INFO("Updating read generation to %d\n", req->read_gen);
+        }
+    }
 
     __btree_print(cache);
 
