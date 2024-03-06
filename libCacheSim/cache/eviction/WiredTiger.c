@@ -374,16 +374,19 @@ static void WT_print_cache(const cache_t *cache) {
 }
 
 static inline uint64_t
-__btree_bytes_evictable(WT_params_t *params)
-{
+__btree_bytes_evictable(WT_params_t *params) {
     return (params->btree_inmem_bytes - params->BTree_root->obj_size)
         * (100 + WT_CACHE_OVERHEAD_PCT) / 100;
 }
 
 static inline uint64_t
-__btree_cache_bytes_inuse(WT_params_t *params)
-{
+__btree_cache_bytes_inuse(WT_params_t *params) {
     return params->cache_inmem_bytes + (params->cache_inmem_bytes * WT_CACHE_OVERHEAD_PCT) / 100;
+}
+
+static inline uint64_t
+__cache_pages_inuse(WT_params_t *params) {
+    return params->pages_inmem - params->pages_evicted;
 }
 
 /*
@@ -461,13 +464,19 @@ __evict_lru_walk(const cache_t *cache)
      * figuring out how many of the entries are candidates so we never end up with more candidates
      * than entries.
      */
-    INFO("__evict_lru_walk: clearing unneeded entries from a queue with %d entries\n", entries);
-    while (entries > WT_EVICT_WALK_BASE)
+    INFO("__evict_lru_walk: clearing unneeded entries from a queue with %u entries\n", entries);
+    while (entries > WT_EVICT_WALK_BASE) {
+        printf("entries = %u\n", entries);
         queue->elements[--entries] = NULL;
+    }
 
+    printf("done\n");
+    printf("entries = %u\n", entries);
     /* Re-adjust the entries to the first non-empty slot */
-    while (queue->elements[entries-1] == NULL)
+    while (entries > 0 && queue->elements[entries-1] == NULL) {
         entries--;
+        printf("entries = %d\n", entries);
+    }
     queue->evict_entries = entries;
     INFO("__evict_lru_walk: ended up with %d entries after clearing\n", entries);
 
@@ -546,6 +555,13 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
 
     start_slot = slot = queue->evict_entries; /* first available evict entry */
     max_entries = MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
+
+    /* This executes if  WT_CACHE_EVICT_CLEAN is set. TODO: update for writes. */
+    total_candidates = __cache_pages_inuse(params);
+    max_entries = MIN(max_entries, 1 + total_candidates / 2);
+
+    printf("total_candidates = %d, __cache_pages_inuse = %lu\n",
+           total_candidates, __cache_pages_inuse(params));
 
     INFO("__evict walk: starting at slot %d with %d max entries\n", slot, max_entries);
 
@@ -1080,6 +1096,7 @@ __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
      */
     cache_params->cache_inmem_bytes += obj->obj_size;
     cache_params->btree_inmem_bytes += obj->obj_size;
+    cache_params->pages_inmem++;
     if (read_gen != WT_READGEN_NOTSET) {
         if (cache_params->read_gen_oldest == WT_READGEN_NOTSET ||
             read_gen < cache_params->read_gen_oldest)
@@ -1180,6 +1197,7 @@ __btree_random_descent(const cache_t *cache)
  */
 static void
 __btree_remove(const cache_t *cache, cache_obj_t *obj) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
     int i;
 
     DEBUG_ASSERT(obj != NULL);
@@ -1200,6 +1218,7 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
     INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id,
          obj->wt_page.parent_page->obj_id,
          obj->wt_page.parent_page->wt_page.children);
+    params->pages_evicted++;
 
     cache_evict_base((cache_t *)cache, obj, true);
 }
@@ -1293,6 +1312,7 @@ __evict_lru_pages(const cache_t *cache) {
     if (__evict_queue_empty(queue))
         return -1;
 
+    printf("Here. Evict_current is %d\n", queue->evict_current);
     /*
      * Get the page at the queue's evict_current position.
     /* Update the current evict position for the next eviction to start at the right place.
@@ -1300,6 +1320,9 @@ __evict_lru_pages(const cache_t *cache) {
     DEBUG_ASSERT(queue->evict_current <= params->evict_slots);
     evict_victim = queue->elements[queue->evict_current];
 
+    /* XXX check why this may happen */
+    if (evict_victim == NULL)
+        return -1;
     /*
      * Decide if we want to split the page (TODO).
     /* Don't support modified pages for now.
