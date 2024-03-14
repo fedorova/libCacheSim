@@ -438,7 +438,7 @@ __evict_lru_walk(const cache_t *cache)
             params->evict_empty_score =
                 MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
         params->cache_eviction_queue_empty++;
-        INFO("__evict_lru_walk: queue empty");
+        INFO("__evict_lru_walk: queue empty\n");
     } else
         params->cache_eviction_queue_not_empty++;
 
@@ -488,6 +488,7 @@ __evict_lru_walk(const cache_t *cache)
         queue->evict_candidates = 0;
         queue->evict_current = -1;
         INFO("__evict_lru_walk: zero entries. Set evict_current to -1\n");
+        return (0);
     }
     if (params->evict_aggressive)
         queue->evict_candidates = entries;
@@ -1309,8 +1310,10 @@ __evict_lru_pages(const cache_t *cache) {
     /* We assume for now that there is only one queue */
     queue = &params->evict_fill_queue;
 
-    if (__evict_queue_empty(queue))
+    if (__evict_queue_empty(queue)) {
+        WARN("__evict_lru_pages(): returning QUEUE EMPTY\n");
         return -1;
+    }
 
     printf("Here. Evict_current is %d\n", queue->evict_current);
     /*
@@ -1321,8 +1324,10 @@ __evict_lru_pages(const cache_t *cache) {
     evict_victim = queue->elements[queue->evict_current];
 
     /* XXX check why this may happen */
-    if (evict_victim == NULL)
+    if (evict_victim == NULL) {
+        WARN("Evict victim is NULL\n");
         return -1;
+    }
     /*
      * Decide if we want to split the page (TODO).
     /* Don't support modified pages for now.
@@ -1336,7 +1341,9 @@ __evict_lru_pages(const cache_t *cache) {
     queue->elements[queue->evict_current] = NULL;
     __btree_remove(cache, evict_victim);
 
-    if (++queue->evict_current >= queue->evict_candidates)
+    if (queue->evict_current + 1 < queue->evict_candidates)
+        queue->evict_current++;
+    else
         queue->evict_current = -1;
 
     return 0;
