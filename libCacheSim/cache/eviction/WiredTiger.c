@@ -1220,6 +1220,13 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
          obj->wt_page.parent_page->obj_id,
          obj->wt_page.parent_page->wt_page.children);
     params->pages_evicted++;
+    params->btree_total_pages--;
+    params->pages_inmem--;
+    params->cache_inmem_bytes -= obj->obj_size;
+    params->btree_inmem_bytes -= obj->obj_size;
+
+    if (obj->wt_page.page_type == WT_INTERNAL)
+        params->btree_internal_pages--;
 
     cache_evict_base((cache_t *)cache, obj, true);
 }
