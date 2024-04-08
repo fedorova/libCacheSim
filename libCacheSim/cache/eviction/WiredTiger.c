@@ -1369,6 +1369,10 @@ __evict_queue_empty(WT_evict_queue *queue) {
 
 static inline bool
 __evict_queue_full(WT_evict_queue *queue) {
+    if (queue->evict_candidates > 500) {
+        printf("CRAZY number of candidates!\n");
+        _exit(0);
+    }
     return (queue->evict_current == 0 && queue->evict_candidates != 0);
 }
 

@@ -224,6 +224,8 @@ static inline void csv_cb1(void *s, size_t len, void *data) {
       req->parent_addr = (uint32_t)strtoul((char *)s, &end, 0);
   }  else if (csv_params->curr_field_idx == csv_params->obj_type_idx) {
       req->page_type = (uint32_t)strtoul((char *)s, &end, 0);
+  } else if (csv_params->curr_field_idx == csv_params->op_type_idx) {
+      req->operation_type = (uint8_t)strtoul((char *)s, &end, 0);
   }
   csv_params->curr_field_idx++;
 }
@@ -263,6 +265,7 @@ void csv_setup_reader(reader_t *const reader) {
   csv_params->read_gen_idx = init_params->read_gen_field;
   csv_params->parent_addr_idx = init_params->parent_addr_field;
   csv_params->obj_type_idx = init_params->obj_type_field;
+  csv_params->op_type_idx = init_params->op_type_field;
   csv_params->csv_parser =
       (struct csv_parser *)malloc(sizeof(struct csv_parser));
 

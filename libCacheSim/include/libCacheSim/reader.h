@@ -53,6 +53,7 @@ typedef struct {
     int read_gen_field;
     int parent_addr_field;
     int obj_type_field;
+    int op_type_field;
 
   // csv reader
   bool has_header;
@@ -122,8 +123,8 @@ typedef struct reader {
   /* if true, ignore the obj_size in the trace, and use size one */
   bool ignore_obj_size;
 
-  /* this is used when 
-   * a) the reader splits a large req into multiple chunked requests 
+  /* this is used when
+   * a) the reader splits a large req into multiple chunked requests
    * b) the trace file uses a count field */
   int n_req_left;
   int64_t last_req_clock_time;
@@ -152,6 +153,7 @@ static inline void set_default_reader_init_params(reader_init_param_t *params) {
   params->read_gen_field = 0;
   params->parent_addr_field = 0;
   params->obj_type_field = 0;
+  params->op_type_field = 0;
 
   params->has_header = false;
   /* whether the user has specified the has_header params */

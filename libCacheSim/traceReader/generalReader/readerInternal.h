@@ -31,6 +31,7 @@ typedef struct {
     int read_gen_idx;     /* WiredTiger cache */
     int parent_addr_idx;  /* WiredTiger cache */
     int obj_type_idx;     /* WiredTiger cache */
+    int op_type_idx;      /* WiredTiger cache */
   bool has_header;
   unsigned char delimiter;
 
