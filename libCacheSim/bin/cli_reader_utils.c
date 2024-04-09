@@ -148,6 +148,10 @@ void parse_reader_params(const char *reader_params_str,
         params->obj_type_field = (int)strtol(value, &end, 0);
         if (strlen(end) > 2)
             ERROR("param parsing error, find string \"%s\" after number\n", end);
+    }  else if (strcasecmp(key, "op-type-col") == 0) {
+        params->op_type_field = (int)strtol(value, &end, 0);
+        if (strlen(end) > 2)
+            ERROR("param parsing error, find string \"%s\" after number\n", end);
     } else if (strcasecmp(key, "obj-id-is-num") == 0) {
       params->obj_id_is_num = is_true(value);
     } else if (strcasecmp(key, "header") == 0 ||
