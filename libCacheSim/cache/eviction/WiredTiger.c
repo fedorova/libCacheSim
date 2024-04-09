@@ -41,6 +41,13 @@ typedef enum { /* Start position for eviction walk */
     WT_EVICT_WALK_RAND_PREV
 } WT_EVICT_WALK_TYPE;
 
+typedef enum { /* WiredTiger operations on pages */
+    WT_ACCESS,    /* WT accessed the page */
+    WT_EVICT,     /* WT evicted the page */
+    WT_EVICT_ADD, /* WT eviction added the page to an evict queue */
+    WT_EVICT_LOOK /* page is accessed by evict pass, not by application */
+} WT_OP_TYPE;
+
 /* WiredTiger flags */
 #define WT_READ_PREV 1
 #define WT_RESTART   2
@@ -206,8 +213,8 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
 
-    INFO("WT_find: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d\n",
-           req->obj_id, req->parent_addr, req->read_gen, req->page_type);
+    INFO("WT_find: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d, op = %d\n",
+         req->obj_id, req->parent_addr, req->read_gen, req->page_type, req->operation_type);
 
     if (cache_obj != NULL) {
         if (!cache_obj->wt_page.in_tree || cache_obj->wt_page.page_type != req->page_type
@@ -220,6 +227,15 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         }
     }
 
+#define STRICT 1
+#if STRICT
+    /* STRICT mode: we mimic WiredTiger actions, don't do any simulation of our own */
+    if (req->operation_type == WT_EVICT) {
+        if (cache_obj == NULL)
+            ERROR("WiredTiger evicts object that we do not have\n");
+        __btree_remove(cache, cache_obj);
+    }
+#endif
     __btree_print(cache);
 
     return cache_obj;
@@ -242,8 +258,8 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
     obj = cache_insert_base(cache, req);
 
 
-    INFO("WT_insert: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d\n",
-           req->obj_id, req->parent_addr, req->read_gen, req->page_type);
+    INFO("WT_insert: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d, op = %d\n",
+         req->obj_id, req->parent_addr, req->read_gen, req->page_type, req->operation_type);
 
     if (params->BTree_root == NULL) {
         /*
@@ -323,7 +339,7 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
 static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 
-    INFO("WT_evict: \n");
+    ERROR("WT_evict: \n");
 
      /*
       * Increment the shared read generation. Do this occasionally even if eviction is not
