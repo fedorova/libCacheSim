@@ -38,11 +38,21 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
       }
     }
 
-    req_cnt++;
-    req_byte += req->obj_size;
-    if (cache->get(cache, req) == false) {
-      miss_cnt++;
-      miss_byte += req->obj_size;
+    /*
+     * This is WiredTiger specific code. If the operation type is
+     * not zero, meaning this is NOT a cache access, we want to
+     * refrain from incrementing the access and/or miss count
+     */
+    if (req->operation_type != 0) {
+        cache->get(cache, req);
+        INFO("Skipping operation in WT\n");
+    } else {
+        req_cnt++;
+        req_byte += req->obj_size;
+        if (cache->get(cache, req) == false) {
+            miss_cnt++;
+            miss_byte += req->obj_size;
+        }
     }
     if (req->clock_time - last_report_ts >= report_interval &&
         req->clock_time != 0) {

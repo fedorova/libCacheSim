@@ -227,6 +227,12 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         }
     }
 
+    /*
+     * For all operation types except WT_ACCESS, the simulation code above is (in sim.c)
+     * will refrain from updating access count and miss count, in effect "ignoring"
+     * these operations. We use these special operation types to modify our cache state
+     * without running the normal simulation.
+     */
 #define STRICT 1
 #if STRICT
     /* STRICT mode: we mimic WiredTiger actions, don't do any simulation of our own */
@@ -234,6 +240,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         if (cache_obj == NULL)
             ERROR("WiredTiger evicts object that we do not have\n");
         __btree_remove(cache, cache_obj);
+        cache_obj = NULL;
     }
 #endif
     __btree_print(cache);
