@@ -239,8 +239,15 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     if (req->operation_type == WT_EVICT) {
         if (cache_obj == NULL)
             ERROR("WiredTiger evicts object that we do not have\n");
+        INFO("PREEMPTIVE EVICTOIN\n");
         __btree_remove(cache, cache_obj);
-        cache_obj = NULL;
+        /*
+         * Below we will be returning an invalid pointer. We do that,
+         * because we don't want the cache code above us to register a miss and
+         * insert back the object that we just evicted. The code above us does
+         * not dereference the pointer, so it's safe to return garbage.
+         */
+        cache_obj = (cache_obj_t *) 0xDEADBEEF;
     }
 #endif
     __btree_print(cache);
