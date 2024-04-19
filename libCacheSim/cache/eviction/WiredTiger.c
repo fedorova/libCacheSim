@@ -269,6 +269,9 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     }
     if (req->operation_type == WT_EVICT_ADD) {
         WARN("Entering STRICT_1 evict_add\n");
+        /* Since the object would be an eviction candidate, update the evict score. */
+        cache_obj->wt_page.evict_score = __evict_priority(cache, cache_obj);
+
         if (queue->evict_entries == params->evict_slots) {
             /*
              * We have reached the tail of the queue.
@@ -1336,17 +1339,17 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
  * to use this global buffer. We do this, so that we don't have to dynamically allocate the memory
  * and the caller doesn't need to free it for us.
  */
-#define PAGE_PRINT_BUFFER_SIZE 50
+#define PAGE_PRINT_BUFFER_SIZE 70
 char page_buffer[PAGE_PRINT_BUFFER_SIZE];
 
 static char *
 __btree_page_to_string(cache_obj_t *obj) {
 
     snprintf((char*)&page_buffer, PAGE_PRINT_BUFFER_SIZE,
-             "page %lu [%lu], %s, read-gen: %ld", obj->obj_id,
+             "page %lu [%lu], %s, read-gen: %ld, evict-score: %ld", obj->obj_id,
              (obj->wt_page.parent_page == NULL)?0:obj->wt_page.parent_page->obj_id,
              (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
-             obj->wt_page.read_gen);
+             obj->wt_page.read_gen, obj->wt_page.evict_score);
     return (char *) page_buffer;
 }
 
