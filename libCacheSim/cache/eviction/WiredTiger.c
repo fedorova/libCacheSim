@@ -55,7 +55,8 @@ typedef enum { /* WiredTiger operations on pages */
 
 #define WT_READGEN_OLDEST 1
 
-#define WT_MAX_MEMPAGE 32768 /* Default value for max leaf page size */
+#define WT_MAX_MEMPAGE 5*1024*1024 /* Default value for max memory page size */
+#define WT_MAX_LEAFPAGE 32768 /* Default value for max leaf page size */
 
 /* These flags must be powers of two -- so we have binary numbers with a single bit set. */
 #define WT_CACHE_EVICT_CLEAN 1 << 0
@@ -149,7 +150,7 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     memset(params->evict_fill_queue.elements, 0, sizeof(cache_obj_t*) * params->evict_slots);
     params->eviction_trigger = 95; /* default eviction trigger in WiredTiger */
     params->cache_size = ccache_params.cache_size;
-    params->splitmempage = 8 * WT_MAX_MEMPAGE / 10;
+    params->splitmempage = 8 * MAX(WT_MAX_MEMPAGE, WT_MAX_LEAFPAGE) / 10;
     cache->eviction_params = params;
     srand(time(NULL));
 
@@ -1068,10 +1069,11 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
         INFO("About to add to queue at slot %d with max entries %d\n", *slotp, max_entries);
         DEBUG_ASSERT(params->evict_ref == NULL);
         DEBUG_ASSERT(*slotp < max_entries);
-        printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp));
         queue->elements[(*slotp)++] = ref;
         ref->wt_page.evict_score = __evict_priority(cache, ref);
         ref->wt_page.evict_flags = WT_PAGE_EVICT_LRU;
+        printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp));
+
         ++evict;
         ++pages_queued;
         ++params->evict_walk_progress;
@@ -1376,8 +1378,10 @@ __evict_priority(const cache_t *cache, cache_obj_t *ref) {
     uint64_t read_gen;
 
     /* Any page set to the oldest generation should be discarded. */
-    if (WT_READGEN_EVICT_SOON(ref->wt_page.read_gen))
+    if (WT_READGEN_EVICT_SOON(ref->wt_page.read_gen)) {
+        INFO("evict score set at WT_READGEN_EVICT_SOON\n");
         return (WT_READGEN_OLDEST);
+    }
 
     /* Any page from a dead tree is a great choice. */
     /* TODO: We are not tracking dead B-Trees yet. */
@@ -1386,8 +1390,10 @@ __evict_priority(const cache_t *cache, cache_obj_t *ref) {
     /* TODO: We are not supporting deletions yet, so this is for the future. */
 
     /* Any large page in memory is likewise a good choice. */
-    if (ref->obj_size > params->splitmempage)
+    if (ref->obj_size > params->splitmempage &&  params->splitmempage > 0) {
+        INFO("evict score set at obj_size > params->splitmempage: %lu\n", params->splitmempage);
         return (WT_READGEN_OLDEST);
+    }
 
     /*
      * TODO: The following if-statement performs a different adjustment for modified
@@ -1396,10 +1402,14 @@ __evict_priority(const cache_t *cache, cache_obj_t *ref) {
     read_gen = ref->wt_page.read_gen;
 
     read_gen += params->evict_priority; /* Think this is only set for bloom and metadata cursors. */
+    if (params->evict_priority != 0)
+        INFO("evict score is adjusted by %lu params->evict_priority\n", params->evict_priority);
 
 #define WT_EVICT_INTL_SKEW WT_THOUSAND
-    if (ref->wt_page.page_type == WT_INTERNAL)
+    if (ref->wt_page.page_type == WT_INTERNAL) {
+        INFO("evict score is adjusted by %d WT_EVICT_INTL_SKEW\n", WT_EVICT_INTL_SKEW);
         read_gen += WT_EVICT_INTL_SKEW;
+    }
 
     return read_gen;
 }
