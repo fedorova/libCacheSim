@@ -107,11 +107,13 @@ static inline void __evict_page_soon(cache_obj_t *obj);
 static uint64_t __evict_priority(const cache_t *cache, cache_obj_t *score);
 static bool __evict_queue_empty(WT_evict_queue *queue);
 static bool __evict_queue_full(WT_evict_queue *queue);
+    static void __evict_queue_print(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk_target(const cache_t *cache);
 static int __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries,
                              u_int *slotp);
 static bool __evict_update_work(const cache_t *cache);
+
 
 /**
  * @brief initialize a WiredTiger cache
@@ -222,7 +224,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
             || cache_obj->wt_page.parent_page->obj_id != req->parent_addr) {
             ERROR("Cached WiredTiger object changed essential properties.\n");
         }
-        else if (cache_obj->wt_page.read_gen != req->read_gen) {
+        else if (cache_obj->wt_page.read_gen != req->read_gen && req->operation_type != WT_EVICT) {
             cache_obj->wt_page.read_gen = req->read_gen;
             INFO("Updating read generation to %d\n", req->read_gen);
         }
@@ -262,13 +264,13 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
             WARN("WiredTiger makes an evict operation %d on an object that we do not have\n",
                   req->operation_type);
             if (req->operation_type == WT_EVICT || req->operation_type == WT_EVICT_ADD) {
-                 ERROR("WT %s on object we don't have: addr = %ld, parent_addr = %ld, read_gen = %d, type = %s\n",
+                WARN("WT %s on object we don't have: addr = %ld, parent_addr = %ld, read_gen = %d, type = %s\n",
                        (req->operation_type==WT_EVICT)?"evict":"evict_add", req->obj_id, req->parent_addr, req->read_gen,
-                       (req->page_type==1)?"leaf":"internal");
+                     (req->page_type==1)?"leaf":"internal");
             }
         }
     }
-    if (req->operation_type == WT_EVICT_ADD) {
+    if (req->operation_type == WT_EVICT_ADD && cache_obj != NULL) {
         WARN("Entering STRICT_1 evict_add\n");
         /* Since the object would be an eviction candidate, update the evict score. */
         cache_obj->wt_page.evict_score = __evict_priority(cache, cache_obj);
@@ -280,7 +282,8 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
             WARN("EVICT QUEUE full in STRICT_1 mode, but WT adds %s\n",
                  __btree_page_to_string(cache_obj));
         } else {
-            WARN("Adding %s to evict queue at slot %d\n", __btree_page_to_string(cache_obj), (queue->evict_entries));
+            WARN("Adding %s to evict queue at slot %d\n", __btree_page_to_string(cache_obj),
+                 (queue->evict_entries));
             queue->elements[queue->evict_entries++] = cache_obj;
         }
 
@@ -291,7 +294,8 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
 
         /* Trim any null entries */
         while (queue->evict_entries > 0 && queue->elements[queue->evict_entries-1] == NULL) {
-            WARN("Trimmed entry %d, new position is %d\n", queue->evict_entries+1, queue->evict_entries);
+            WARN("Trimmed entry %d, new position is %d\n", queue->evict_entries+1,
+                 queue->evict_entries);
             queue->evict_entries--;
         }
 
@@ -312,14 +316,21 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
             WARN("WT evicts %s, but our queue is empty\n", __btree_page_to_string(cache_obj));
         }
         else {
+            /* Print the evict queue */
+            __evict_queue_print(cache, queue);
+
+            WARN("Evicting evict_current = %d\n", queue->evict_current);
             evict_victim = queue->elements[queue->evict_current];
             queue->elements[queue->evict_current++] = NULL;
+
             /* Compare our candidate with the WiredTiger candidate */
             WARN("Simulation evicted: %s\n", __btree_page_to_string(evict_victim));
-            WARN("WiredTiger evicted: %s\n", __btree_page_to_string(cache_obj));
+            WARN("WiredTiger evicted: %s\n",
+                 (cache_obj==NULL)?"NULL":__btree_page_to_string(cache_obj));
             __btree_remove(cache, evict_victim);
         }
     }
+  done:
     if (req->operation_type != WT_ACCESS)
         cache_obj = (cache_obj_t *) 0xDEADBEEF;
 #endif
@@ -1524,6 +1535,19 @@ __btree_readgen_new(const cache_t *cache) {
 
 static inline void __evict_page_soon(cache_obj_t *obj) {
     obj->wt_page.read_gen = WT_READGEN_OLDEST;
+}
+
+static void
+__evict_queue_print(const cache_t *cache, WT_evict_queue *queue) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+    for (int i = 0; i < params->evict_slots; i++) {
+        WARN("*** %d ***", i);
+        if (queue->elements[i] == NULL)
+            WARN("NULL entry\n");
+        else
+            WARN("%s\n", __btree_page_to_string(queue->elements[i]));
+    }
 }
 
 #ifdef __cplusplus
