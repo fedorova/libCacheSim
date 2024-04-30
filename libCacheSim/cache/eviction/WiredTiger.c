@@ -99,20 +99,21 @@ static void __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, i
 
 /* Eviction */
 static int __evict_lru_pages(const cache_t *cache);
-static int __evict_lru_walk(const cache_t *cache);
+    static int __evict_lru_walk(const cache_t *cache, int *entries_added_p);
 static int __evict_qsort_compare(const void *a, const void *b);
-static inline bool ___evict_queue_empty(WT_evict_queue *queue);
-static inline bool __evict_queue_full(WT_evict_queue *queue);
 static inline void __evict_page_soon(cache_obj_t *obj);
 static uint64_t __evict_priority(const cache_t *cache, cache_obj_t *score);
-static bool __evict_queue_empty(WT_evict_queue *queue);
-static bool __evict_queue_full(WT_evict_queue *queue);
-    static void __evict_queue_print(const cache_t *cache, WT_evict_queue *queue);
+static inline bool __evict_queue_empty(const cache_t *cache);
+static inline bool __evict_queue_full(const cache_t *cache);
+static void __evict_queue_print(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk_target(const cache_t *cache);
 static int __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries,
                              u_int *slotp);
 static bool __evict_update_work(const cache_t *cache);
+
+/* Other general functions */
+static char* __op_to_string(int op);
 
 
 /**
@@ -224,19 +225,21 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
             || cache_obj->wt_page.parent_page->obj_id != req->parent_addr) {
             ERROR("Cached WiredTiger object changed essential properties.\n");
         }
-        else if (cache_obj->wt_page.read_gen != req->read_gen && req->operation_type != WT_EVICT) {
+        else if (cache_obj->wt_page.read_gen != req->read_gen) {
             cache_obj->wt_page.read_gen = req->read_gen;
-            INFO("Updating read generation to %d\n", req->read_gen);
+            INFO("During %s operation WT updated read generation to %d for %s\n", __op_to_string(req->operation_type),
+                 req->read_gen, __btree_page_to_string(cache_obj));
         }
     }
 
     /*
-     * For all operation types except WT_ACCESS, the simulation code above is (in sim.c)
-     * will refrain from updating access count and miss count, in effect "ignoring"
-     * these operations. We use these special operation types to modify our cache state
-     * without running the normal simulation.
+     * The STRICT modes below make the simulation more constrained, where we closely follow
+     * what WT does instead of fully simulating the algorithm on our own. This is useful for
+     * analysis and debugging.
      */
 #ifdef STRICT
+    /* The strict mode simply evicts exactly the same objects as WiredTiger */
+
     INFO("Entering STRICT\n");
     /* STRICT mode: we mimic WiredTiger actions, don't do any simulation of our own */
     if (req->operation_type == WT_EVICT) {
@@ -253,8 +256,16 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         cache_obj = (cache_obj_t *) 0xDEADBEEF;
     }
 #endif
-#define STRICT_1
+/* #define STRICT_1 */
 #ifdef STRICT_1
+    /*
+     * The STRICT_1 mode adds the same items to evict queues as WiredTiger and evicts objects at the same
+     * time as WiredTiger, but it does not evict the same objects as WiredTiger. Instead, it evicts objects
+     * that happen to be at the top of its evict queues. This mode cannot complete running, because eventually the
+     * simulation diverges from the trace. E.g., WiredTiger adds to queues objects we don't have. So we run out
+     * of things in queues and we have nothing to evict. Currently the code below will crash if the evict queue
+     * becomes empty, because it does not check if evict_current indexes a NULL entry.
+     */
     cache_obj_t *evict_victim;
     WT_evict_queue *queue =  &params->evict_fill_queue;
 
@@ -330,11 +341,80 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
             __btree_remove(cache, evict_victim);
         }
     }
-  done:
-    if (req->operation_type != WT_ACCESS)
-        cache_obj = (cache_obj_t *) 0xDEADBEEF;
-#endif
+#endif /* STRICT_1 */
+#define STRICT_2
+#ifdef STRICT_2
+    WT_evict_queue *queue;
+    static int evict_added_surplus = 0;  /* Counter of objects we added to the evict queue. */
+    int evict_items_added = 0;
 
+    queue = &params->evict_fill_queue;
+    if (req->operation_type == WT_EVICT_ADD) {
+        WARN("Entering STRICT_2 evict_add.\n");
+        /*
+         * WT_EVICT_ADD means that WiredTiger is adding a single item to the evict queue.
+         * Instead of also adding a single item, we call our code that walks the tree
+         * and adds multiple items. We record how many items we added. If we had added more
+         * items than WT, we don't keep adding more. Instead we wait until WiredTiger adds
+         * the same number of items before proceeding.
+         */
+        if (evict_added_surplus-- > 0) {
+            /* We already added more than WT. No need to add more */
+            WARN("STRICT_2: skipping evict_add. Current surplus is %d\n", evict_added_surplus);
+            goto done;
+        }
+        __evict_lru_walk(cache, &evict_items_added);
+        evict_added_surplus += evict_items_added;
+
+        WARN("STRICT_2 evict_lru_walk added %d items. Surplus is %d.\n", evict_items_added,  evict_added_surplus);
+        __evict_queue_print(cache, queue);
+    }
+    else if (req->operation_type == WT_EVICT) {
+        cache_obj_t *evict_victim;
+
+        WARN("Entering STRICT_2 evict.\n");
+        //goto remove;
+        __evict_queue_print(cache, queue);
+        params->read_gen++;
+
+        if (queue->evict_current == params->evict_slots) {
+            queue->evict_current = 0;
+            WARN("Resetting evict_current to zero during evict operation in STRICT_2 mode\n");
+        }
+        if (queue->evict_current < 0 || queue->evict_current >= params->evict_slots)
+            ERROR("Evict current is out of range: %d\n",  queue->evict_current);
+
+        if (queue->elements[queue->evict_current] == NULL)
+            ERROR("Nothing to evict at position %d\n", queue->evict_current);
+
+        WARN("Evicting evict_current = %d\n", queue->evict_current);
+        evict_victim = queue->elements[queue->evict_current];
+        queue->elements[queue->evict_current++] = NULL;
+
+        WARN("Simulation evicted: %s. Object_size %u\n", __btree_page_to_string(evict_victim), evict_victim->obj_size);
+        WARN("WiredTiger evicted: %s. Object size %u\n",
+             (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj), (cache_obj == NULL)? 0 : cache_obj->obj_size);
+        __btree_remove(cache, evict_victim);
+/*
+      remove:
+        if (cache_obj != NULL)
+            __btree_remove(cache, cache_obj);
+        else
+            ERROR("Evict object we don't have\n");
+*/
+    }
+#endif /* STRICT_2 */
+    /*
+     * For all operation types except WT_ACCESS, the simulation code above us (in sim.c)
+     * will refrain from updating access count and miss count, in effect "ignoring"
+     * these operations. We use these special operation types to modify our cache state
+     * without running the normal simulation.
+     */
+  done:
+    if (req->operation_type != WT_ACCESS) {
+        WARN("Operation NOT access\n");
+        cache_obj = (cache_obj_t *) 0xDEADBEEF;
+    }
     __btree_print(cache);
 
     return cache_obj;
@@ -437,8 +517,9 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
  */
 static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    int entries_added;
 
-    ERROR("WT_evict: \n");
+    ERROR("WT_evict: %lu bytes in memory.\n", params->btree_inmem_bytes);
 
      /*
       * Increment the shared read generation. Do this occasionally even if eviction is not
@@ -449,7 +530,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
     __evict_update_work(cache);
     /* Under what conditions does the eviction server keep evicting? XXX */
-    __evict_lru_walk(cache);
+    __evict_lru_walk(cache, &entries_added);
 
     /* Keep evicting pages until there's something left in queues. */
     while (__evict_lru_pages(cache) == 0)
@@ -501,7 +582,7 @@ __btree_cache_bytes_inuse(WT_params_t *params) {
 
 static inline uint64_t
 __cache_pages_inuse(WT_params_t *params) {
-    return params->pages_inmem - params->pages_evicted;
+    return params->pages_inmem;
 }
 
 /*
@@ -519,7 +600,7 @@ __cache_pages_inuse(WT_params_t *params) {
  *     read generations of the filled entries.
  */
 static int
-__evict_lru_walk(const cache_t *cache)
+__evict_lru_walk(const cache_t *cache, int *entries_added_p)
 {
     WT_evict_queue *queue;
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
@@ -528,6 +609,8 @@ __evict_lru_walk(const cache_t *cache)
     uint64_t read_gen_oldest;
 
     INFO("__evict_lru_walk");
+
+    *entries_added_p = 0;
 
     if (params->evict_empty_score > 0)
         params->evict_empty_score--;
@@ -539,7 +622,7 @@ __evict_lru_walk(const cache_t *cache)
     queue = &params->evict_fill_queue;
 
     /* If the queue is full, we are done. */
-    if (__evict_queue_full(queue)) {
+    if (__evict_queue_full(cache)) {
         WARN("evict_lru_walk: queue full, bailing out\n");
         return 0;
     }
@@ -548,7 +631,7 @@ __evict_lru_walk(const cache_t *cache)
      * If the queue we are filling is empty, pages are being requested faster than they are being
      * queued.
      */
-    if (__evict_queue_empty(queue)) {
+    if (__evict_queue_empty(cache)) {
         if (FLAG_ISSET(params->evict_flags, WT_CACHE_EVICT_HARD))
             params->evict_empty_score =
                 MIN(params->evict_empty_score + WT_EVICT_SCORE_BUMP, WT_EVICT_SCORE_MAX);
@@ -563,8 +646,7 @@ __evict_lru_walk(const cache_t *cache)
      * If the walk is interrupted, we still need to sort the queue: the next walk assumes there are
      * no entries beyond WT_EVICT_WALK_BASE.
      */
-    ret = __evict_walk(cache, queue);
-    (void) ret; /* No need to check for now. */
+    *entries_added_p = __evict_walk(cache, queue);
 
     /*
      * Sort the evict queue and set the number of non-empty elements
@@ -651,7 +733,7 @@ __evict_lru_walk(const cache_t *cache)
     }
     params->cache_eviction_pages_queued_post_lru += queue->evict_candidates;
     queue->evict_current = 0;
-    return (ret);
+    return (0);
 }
 
 /*
@@ -667,26 +749,23 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
 {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     u_int max_entries, retries, slot, start_slot, total_candidates;
-    int ret;
+    int entries_added;
 
     start_slot = slot = queue->evict_entries; /* first available evict entry */
     max_entries = MIN(slot + WT_EVICT_WALK_INCR, params->evict_slots);
 
     /* This executes if  WT_CACHE_EVICT_CLEAN is set. TODO: update for writes. */
     total_candidates = __cache_pages_inuse(params);
-    max_entries = MIN(max_entries, 1 + total_candidates / 2);
-
+//max_entries = MIN(max_entries, 1 + total_candidates / 2);
+    max_entries = MIN(max_entries, total_candidates);
+    max_entries = MIN(max_entries, (params->evict_slots - slot));
     printf("total_candidates = %d, __cache_pages_inuse = %lu\n",
            total_candidates, __cache_pages_inuse(params));
 
     INFO("__evict walk: starting at slot %d with %d max entries\n", slot, max_entries);
 
   retry:
-    while (slot < max_entries) {
-        INFO("evict_walk: calling __evict_walk_tree in a loop\n");
-        __evict_walk_tree(cache, queue, max_entries, &slot);
-    }
-
+    __evict_walk_tree(cache, queue, max_entries, &slot);
     /*
      * Repeat the walks a few times if we don't find enough pages. Give up when we have some
      * candidates and we aren't finding more.
@@ -700,16 +779,12 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
         goto retry;
     }
 
-    /*
-     * If we didn't find any entries on a walk when we weren't interrupted, let our caller know.
-     */
-    if (queue->evict_entries == slot)
-        ret = -1;
+    entries_added = slot - queue->evict_entries;
 
     INFO("__evict walk: old evict_entries = %d, new evict_entries = %d\n",
          queue->evict_entries, slot);
     queue->evict_entries = slot;
-    return (ret);
+    return (entries_added);
 }
 
 /*
@@ -874,7 +949,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
     cache_obj_t *evict, *end, *last_parent, *ref, *start;
     bool give_up;
     int ret, refs_walked, restarts;
-    uint32_t target_pages, remaining_slots, walk_flags;
+    int32_t target_pages, remaining_slots, walk_flags;
     uint64_t internal_pages_already_queued, internal_pages_queued, internal_pages_seen;
     uint64_t min_pages, pages_already_queued, pages_seen, pages_queued;
 
@@ -895,17 +970,18 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
         params->evict_walk_target = __evict_walk_target(cache);
         params->evict_walk_progress = 0;
     }
-    INFO("__evict_walk_tree: target is %d, progress is %d, target pages is %d\n",
-         params->evict_walk_target, params->evict_walk_progress, target_pages);
     target_pages = params->evict_walk_target - params->evict_walk_progress;
 
     if (target_pages > remaining_slots)
         target_pages = remaining_slots;
 
-    if (target_pages == 0)
+    INFO("__evict_walk_tree: target is %d, progress is %d, target pages is %d\n",
+         params->evict_walk_target, params->evict_walk_progress, target_pages);
+
+    if (target_pages <= 0)
         return (0);
 
-    min_pages = 10 * (uint64_t)target_pages;
+    min_pages = MIN(__cache_pages_inuse(params), 10 * (uint64_t)target_pages);
     end = start + target_pages;
 
     /*
@@ -953,6 +1029,9 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          */
         give_up = pages_seen > min_pages &&
           (pages_queued == 0 || (pages_seen / pages_queued) > (min_pages / target_pages));
+
+        INFO("give_up = %d, pages_seen = %ld, pages_queued = %ld, min_pages = %ld, target_pages = %d\n",
+             give_up, pages_seen, pages_queued, min_pages, target_pages);
 
         INFO("evict_walk_tree: after __btree_tree_walk_count: give_up = %d, ref = %p\n",
              give_up, ref);
@@ -1010,6 +1089,7 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
             pages_already_queued++;
             if (ref->wt_page.page_type == WT_INTERNAL)
                 internal_pages_already_queued++;
+            WARN("page already queued\n");
             continue;
         }
 
@@ -1067,8 +1147,10 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
          * TODO: We don't need eviction debug mode and we currently only support a single tree.
          */
         if (ref->wt_page.page_type == WT_INTERNAL) {
-            if (getMapSize(ref->wt_page.children) > 0)
+            if (getMapSize(ref->wt_page.children) > 0) {
+                INFO("Walking over internal page\n");
                 continue;
+            }
             if (!params->evict_aggressive)
                 continue;
         }
@@ -1222,7 +1304,6 @@ __btree_init_page(cache_obj_t *obj, WT_params_t *cache_params, short page_type,
     if (read_gen > cache_params->read_gen)
         cache_params->read_gen = read_gen;
 
-    cache_params->btree_total_pages++;
     if (page_type != WT_LEAF)
         cache_params->btree_internal_pages++;
     return 0;
@@ -1321,7 +1402,6 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
 
     if (obj->wt_page.page_type == WT_ROOT) {
         ERROR("WiredTiger: not allowed to remove root\n");
-        return;
     }
     else if (obj->wt_page.page_type == WT_INTERNAL) {
         if (getMapSize(obj->wt_page.children) > 0)
@@ -1336,7 +1416,6 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
          obj->wt_page.parent_page->obj_id,
          obj->wt_page.parent_page->wt_page.children);
     params->pages_evicted++;
-    params->btree_total_pages--;
     params->pages_inmem--;
     params->cache_inmem_bytes -= obj->obj_size;
     params->btree_inmem_bytes -= obj->obj_size;
@@ -1441,7 +1520,7 @@ __evict_lru_pages(const cache_t *cache) {
     /* We assume for now that there is only one queue */
     queue = &params->evict_fill_queue;
 
-    if (__evict_queue_empty(queue)) {
+    if (__evict_queue_empty(cache)) {
         WARN("__evict_lru_pages(): returning QUEUE EMPTY\n");
         return -1;
     }
@@ -1482,7 +1561,9 @@ __evict_lru_pages(const cache_t *cache) {
 
 
 static bool
-__evict_queue_empty(WT_evict_queue *queue) {
+__evict_queue_empty(const cache_t *cache) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    WT_evict_queue *queue = &params->evict_fill_queue;
 
     if (queue->evict_current == -1)
         return true;
@@ -1492,12 +1573,16 @@ __evict_queue_empty(WT_evict_queue *queue) {
 }
 
 static inline bool
-__evict_queue_full(WT_evict_queue *queue) {
-    if (queue->evict_candidates > 500) {
-        printf("CRAZY number of candidates!\n");
-        _exit(0);
-    }
-    return (queue->evict_current == 0 && queue->evict_candidates != 0);
+__evict_queue_full(const cache_t *cache) {
+    WT_params_t *params = (WT_params_t *)cache->eviction_params;
+    WT_evict_queue *queue = &params->evict_fill_queue;
+
+    if (queue->evict_candidates > 500)
+        ERROR("CORRUPTED number of candidates!\n");
+
+    /* This is what WiredTiger does. Don't use that for STRICT_2 */
+    /* return (queue->evict_current == 0 && queue->evict_candidates != 0); */
+    return (queue->evict_entries == params->evict_slots);
 }
 
 static inline bool
@@ -1547,6 +1632,19 @@ __evict_queue_print(const cache_t *cache, WT_evict_queue *queue) {
             WARN("NULL entry\n");
         else
             WARN("%s\n", __btree_page_to_string(queue->elements[i]));
+    }
+}
+
+static char* __op_to_string(int op) {
+    switch(op) {
+    case  WT_ACCESS:
+        return "access";
+    case  WT_EVICT:
+        return "evict";
+    case WT_EVICT_ADD:
+        return "evict_add";
+    case WT_EVICT_LOOK:
+        return "evict_look";
     }
 }
 
