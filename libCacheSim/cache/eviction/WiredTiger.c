@@ -648,6 +648,8 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
      */
     *entries_added_p = __evict_walk(cache, queue);
 
+    WARN("EVICT QUEUE before SORTING\n");
+    __evict_queue_print(cache, queue);
     /*
      * Sort the evict queue and set the number of non-empty elements
      */
@@ -655,6 +657,9 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
 
     qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __evict_qsort_compare);
     entries = queue->evict_entries;
+
+    WARN("EVICT QUEUE after SORTING\n");
+    __evict_queue_print(cache, queue);
 
     /*
      * If we have more entries than the maximum tracked between walks, clear them. Do this before
