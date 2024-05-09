@@ -395,13 +395,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         WARN("WiredTiger evicted: %s. Object size %u\n",
              (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj), (cache_obj == NULL)? 0 : cache_obj->obj_size);
         __btree_remove(cache, evict_victim);
-/*
-      remove:
-        if (cache_obj != NULL)
-            __btree_remove(cache, cache_obj);
-        else
-            ERROR("Evict object we don't have\n");
-*/
+
     }
 #endif /* STRICT_2 */
     /*
@@ -415,7 +409,6 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         WARN("Operation NOT access\n");
         cache_obj = (cache_obj_t *) 0xDEADBEEF;
     }
-    __btree_print(cache);
 
     return cache_obj;
 }
@@ -1339,11 +1332,11 @@ __btree_print_node(cache_obj_t *node, int times)
 static void
 __btree_print(const cache_t *cache){
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
-#if 0
+
     printf("BEGIN ----------------------------------------\n");
     __btree_print_node(params->BTree_root, 0);
     printf("\nEND ----------------------------------------\n");
-#endif
+
 }
 
 /*
@@ -1410,6 +1403,9 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
             __btree_remove(cache, getValueAtIndex(obj->wt_page.children, i));
         deleteMap(obj->wt_page.children);
     }
+
+    if (obj == params->evict_ref)
+        params->evict_ref = NULL;
 
     DEBUG_ASSERT(removePair(obj->wt_page.parent_page->wt_page.children, obj->obj_id));
     INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id,
