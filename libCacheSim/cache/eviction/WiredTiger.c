@@ -146,7 +146,11 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
 
     WT_params_t *params = (WT_params_t *)malloc(sizeof(WT_params_t));
     memset(params, 0, sizeof(WT_params_t));
-    params->evict_slots = WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR;
+    /*
+     * XXX. For now double the queue size. WiredTiger uses two queues
+     * and we use one, so we need twice the space.
+     */
+    params->evict_slots = 2 * (WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR);
     if ((params->evict_fill_queue.elements =
          malloc(sizeof(cache_obj_t*) * params->evict_slots)) == NULL)
         return NULL;
