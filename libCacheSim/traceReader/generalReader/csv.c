@@ -221,7 +221,7 @@ static inline void csv_cb1(void *s, size_t len, void *data) {
   } else if (csv_params->curr_field_idx == csv_params->read_gen_idx) {
       req->read_gen = (uint32_t)strtoul((char *)s, &end, 0);
   }  else if (csv_params->curr_field_idx == csv_params->parent_addr_idx) {
-      req->parent_addr = (uint32_t)strtoul((char *)s, &end, 0);
+      req->parent_addr = (uint64_t)strtoul((char *)s, &end, 0);
   }  else if (csv_params->curr_field_idx == csv_params->obj_type_idx) {
       req->page_type = (uint32_t)strtoul((char *)s, &end, 0);
   } else if (csv_params->curr_field_idx == csv_params->op_type_idx) {

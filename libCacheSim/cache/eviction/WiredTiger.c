@@ -469,8 +469,8 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
 
     /* The object is not root and is not in tree. Insert it under its parent. */
     if((parent_page = __btree_find_parent(params->BTree_root, req->parent_addr)) == NULL) {
-        ERROR("Parent of WiredTiger object %ld not found in WiredTiger tree. Cannot insert.\n",
-               obj->obj_id);
+        ERROR("Parent %ld of WiredTiger object %ld not found in WiredTiger tree. Cannot insert.\n",
+              req->parent_addr, obj->obj_id);
         return NULL;
     } else {
         DEBUG_ASSERT(parent_page->obj_id == req->parent_addr);
