@@ -196,7 +196,6 @@ static void WT_free(cache_t *cache)
  */
 static bool WT_get(cache_t *cache, const request_t *req)
 {
-    INFO("WT_get: \n");
     return cache_get_base(cache, req);
 }
 
@@ -231,8 +230,6 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         }
         else if (cache_obj->wt_page.read_gen != req->read_gen) {
             cache_obj->wt_page.read_gen = req->read_gen;
-            INFO("During %s operation WT updated read generation to %d for %s\n", __op_to_string(req->operation_type),
-                 req->read_gen, __btree_page_to_string(cache_obj));
         }
     }
 
@@ -376,9 +373,6 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     else if (req->operation_type == WT_EVICT) {
         cache_obj_t *evict_victim;
 
-        WARN("Entering STRICT_2 evict.\n");
-        //goto remove;
-        //__evict_queue_print(cache, queue);
         params->read_gen++;
 
         if (queue->evict_current == params->evict_slots) {
@@ -391,7 +385,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         if (queue->elements[queue->evict_current] == NULL)
             ERROR("Nothing to evict at position %d\n", queue->evict_current);
 
-        WARN("Evicting evict_current = %d\n", queue->evict_current);
+        WARN("STRICT_2: Evict at pos. %d\n", queue->evict_current);
         evict_victim = queue->elements[queue->evict_current];
         queue->elements[queue->evict_current++] = NULL;
 
