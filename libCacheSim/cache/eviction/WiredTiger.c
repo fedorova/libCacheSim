@@ -332,7 +332,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         }
         else {
             /* Print the evict queue */
-            __evict_queue_print(cache, queue);
+            //__evict_queue_print(cache, queue);
 
             WARN("Evicting evict_current = %d\n", queue->evict_current);
             evict_victim = queue->elements[queue->evict_current];
@@ -371,14 +371,14 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         evict_added_surplus += evict_items_added;
 
         WARN("STRICT_2 evict_lru_walk added %d items. Surplus is %d.\n", evict_items_added,  evict_added_surplus);
-        __evict_queue_print(cache, queue);
+        //__evict_queue_print(cache, queue);
     }
     else if (req->operation_type == WT_EVICT) {
         cache_obj_t *evict_victim;
 
         WARN("Entering STRICT_2 evict.\n");
         //goto remove;
-        __evict_queue_print(cache, queue);
+        //__evict_queue_print(cache, queue);
         params->read_gen++;
 
         if (queue->evict_current == params->evict_slots) {
@@ -395,9 +395,9 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         evict_victim = queue->elements[queue->evict_current];
         queue->elements[queue->evict_current++] = NULL;
 
-        WARN("Simulation evicted: %s. Object_size %u\n", __btree_page_to_string(evict_victim), evict_victim->obj_size);
-        WARN("WiredTiger evicted: %s. Object size %u\n",
-             (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj), (cache_obj == NULL)? 0 : cache_obj->obj_size);
+        //WARN("Simulation evicted: %s. Object_size %u\n", __btree_page_to_string(evict_victim), evict_victim->obj_size);
+        //WARN("WiredTiger evicted: %s. Object size %u\n",
+//             (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj), (cache_obj == NULL)? 0 : cache_obj->obj_size);
         __btree_remove(cache, evict_victim);
 
     }
@@ -645,8 +645,6 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
      */
     *entries_added_p = __evict_walk(cache, queue);
 
-    WARN("EVICT QUEUE before SORTING\n");
-    __evict_queue_print(cache, queue);
     /*
      * Sort the evict queue and set the number of non-empty elements
      */
@@ -654,9 +652,6 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
 
     qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*), __evict_qsort_compare);
     entries = queue->evict_entries;
-
-    WARN("EVICT QUEUE after SORTING\n");
-    __evict_queue_print(cache, queue);
 
     /*
      * If we have more entries than the maximum tracked between walks, clear them. Do this before
