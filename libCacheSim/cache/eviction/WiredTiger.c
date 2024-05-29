@@ -389,9 +389,8 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         evict_victim = queue->elements[queue->evict_current];
         queue->elements[queue->evict_current++] = NULL;
 
-        //WARN("Simulation evicted: %s. Object_size %u\n", __btree_page_to_string(evict_victim), evict_victim->obj_size);
-        //WARN("WiredTiger evicted: %s. Object size %u\n",
-//             (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj), (cache_obj == NULL)? 0 : cache_obj->obj_size);
+        WARN("Sim evicted: %s\n", __btree_page_to_string(evict_victim));
+        WARN("WT evicted: %s \n", (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj));
         __btree_remove(cache, evict_victim);
 
     }
