@@ -130,6 +130,7 @@ static cache_obj_t *LRU_find(cache_t *cache, const request_t *req,
                              const bool update_cache) {
   LRU_params_t *params = (LRU_params_t *)cache->eviction_params;
   cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
+  static uint64_t count = 0;
 
   if (cache_obj && likely(update_cache)) {
     /* lru_head is the newest, move cur obj to lru_head */
@@ -138,6 +139,8 @@ static cache_obj_t *LRU_find(cache_t *cache, const request_t *req,
 #endif
       move_obj_to_head(&params->q_head, &params->q_tail, cache_obj);
   }
+
+  printf("find %lu %lu\n", ++count, req->obj_id);
   return cache_obj;
 }
 
@@ -156,6 +159,7 @@ static cache_obj_t *LRU_insert(cache_t *cache, const request_t *req) {
 
   cache_obj_t *obj = cache_insert_base(cache, req);
   prepend_obj_to_head(&params->q_head, &params->q_tail, obj);
+  obj->obj_id = req->obj_id;
 
   return obj;
 }
@@ -211,6 +215,7 @@ static void LRU_evict(cache_t *cache, const request_t *req) {
          obj_to_evict->misc.next_access_vtime);
 #endif
 
+  printf("evict %lu\n", obj_to_evict->obj_id);
   cache_evict_base(cache, obj_to_evict, true);
 }
 
