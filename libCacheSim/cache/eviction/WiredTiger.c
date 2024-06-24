@@ -233,6 +233,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         }
     }
 
+
     /*
      * The STRICT modes below make the simulation more constrained, where we closely follow
      * what WT does instead of fully simulating the algorithm on our own. This is useful for
@@ -350,7 +351,11 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     int evict_items_added = 0;
 
     queue = &params->evict_fill_queue;
-    if (req->operation_type == WT_EVICT_ADD) {
+
+	if (req->operation_type == WT_ACCESS)
+		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
+			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
+    else if (req->operation_type == WT_EVICT_ADD) {
         WARN("Entering STRICT_2 evict_add.\n");
         /*
          * WT_EVICT_ADD means that WiredTiger is adding a single item to the evict queue.
@@ -385,13 +390,14 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         if (queue->elements[queue->evict_current] == NULL)
             ERROR("Nothing to evict at position %d\n", queue->evict_current);
 
-        WARN("STRICT_2: Evict at pos. %d\n", queue->evict_current);
         evict_victim = queue->elements[queue->evict_current];
         queue->elements[queue->evict_current++] = NULL;
 
-        WARN("Sim evicted: %s\n", __btree_page_to_string(evict_victim));
-        WARN("WT evicted: %s \n", (cache_obj == NULL) ? "NULL" : __btree_page_to_string(cache_obj));
-        __btree_remove(cache, evict_victim);
+		WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
+			 params->cache_inmem_bytes);
+		__btree_remove(cache, evict_victim);
+		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
+			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
 
     }
 #endif /* STRICT_2 */
@@ -449,7 +455,7 @@ static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
     }
 
     if (obj->wt_page.in_tree) {
-        printf("Error: new WiredTiger object already in tree\n");
+        ERROR("New WiredTiger object already in tree\n");
         return NULL;
     }
 
@@ -509,7 +515,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     int entries_added;
 
-    ERROR("WT_evict: %lu bytes in memory.\n", params->btree_inmem_bytes);
+    ERROR("WT_evict: %lu bytes in memory.\n", params->cache_inmem_bytes);
 
      /*
       * Increment the shared read generation. Do this occasionally even if eviction is not
@@ -653,16 +659,12 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
      */
     INFO("__evict_lru_walk: clearing unneeded entries from a queue with %u entries\n", entries);
     while (entries > WT_EVICT_WALK_BASE) {
-        printf("entries = %u\n", entries);
         queue->elements[--entries] = NULL;
     }
 
-    printf("done\n");
-    printf("entries = %u\n", entries);
     /* Re-adjust the entries to the first non-empty slot */
     while (entries > 0 && queue->elements[entries-1] == NULL) {
         entries--;
-        printf("entries = %d\n", entries);
     }
     queue->evict_entries = entries;
     INFO("__evict_lru_walk: ended up with %d entries after clearing\n", entries);
@@ -749,8 +751,6 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
 //max_entries = MIN(max_entries, 1 + total_candidates / 2);
     max_entries = MIN(max_entries, total_candidates);
     max_entries = MIN(max_entries, (params->evict_slots - slot));
-    printf("total_candidates = %d, __cache_pages_inuse = %lu\n",
-           total_candidates, __cache_pages_inuse(params));
 
     INFO("__evict walk: starting at slot %d with %d max entries\n", slot, max_entries);
 
@@ -1155,7 +1155,6 @@ __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries
         queue->elements[(*slotp)++] = ref;
         ref->wt_page.evict_score = __evict_priority(cache, ref);
         ref->wt_page.evict_flags = WT_PAGE_EVICT_LRU;
-        printf("Adding page %s to queue at slot %d\n", __btree_page_to_string(ref), (*slotp));
 
         ++evict;
         ++pages_queued;
@@ -1518,7 +1517,6 @@ __evict_lru_pages(const cache_t *cache) {
         return -1;
     }
 
-    printf("Here. Evict_current is %d\n", queue->evict_current);
     /*
      * Get the page at the queue's evict_current position.
     /* Update the current evict position for the next eviction to start at the right place.
