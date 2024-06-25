@@ -19,12 +19,8 @@
 #define WT_EVICT_SCORE_BUMP 10
 #define WT_EVICT_SCORE_MAX 100
 
-/*
- * XXX. For now double the size of these parameters, as they determine the evict queue size.
- * WiredTiger uses two queues and we use one, so we need twice the space.
- */
-#define WT_EVICT_WALK_BASE 600
-#define WT_EVICT_WALK_INCR 200
+#define WT_EVICT_WALK_BASE 300
+#define WT_EVICT_WALK_INCR 100
 
 #define WT_PAGE_EVICT_LRU 1
 
@@ -694,7 +690,7 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
     }
     queue->evict_entries = entries;
     INFO("__evict_lru_walk: got %d entries. %u evicted since last fill.\n",
-		 evicted_since_last_fill, queue->evict_entries);
+		 queue->evict_entries, evicted_since_last_fill);
 	/* This is not a WT variable -- using it for debugging */
 	evicted_since_last_fill = 0;
 
