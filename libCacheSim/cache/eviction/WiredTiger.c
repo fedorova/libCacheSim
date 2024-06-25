@@ -352,6 +352,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
 
     queue = &params->evict_fill_queue;
 
+	WARN("%ld bytes cached\n", params->cache_inmem_bytes);
 	if (req->operation_type == WT_ACCESS)
 		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
 			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
@@ -373,10 +374,14 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         evict_added_surplus += evict_items_added;
 
         WARN("STRICT_2 evict_lru_walk added %d items. Surplus is %d.\n", evict_items_added,  evict_added_surplus);
-        //__evict_queue_print(cache, queue);
     }
-    else if (req->operation_type == WT_EVICT) {
-        cache_obj_t *evict_victim;
+    else if (req->operation_type == WT_EVICT) { /* Done by WT_evict now */
+
+		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
+			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
+
+		/*
+		cache_obj_t *evict_victim;
 
         params->read_gen++;
 
@@ -396,8 +401,7 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
 		WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 			 params->cache_inmem_bytes);
 		__btree_remove(cache, evict_victim);
-		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
-			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
+		*/
 
     }
 #endif /* STRICT_2 */
@@ -513,9 +517,9 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
  */
 static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
+	WT_evict_queue *queue = &params->evict_fill_queue;
+	cache_obj_t *evict_victim;
     int entries_added;
-
-    ERROR("WT_evict: %lu bytes in memory.\n", params->cache_inmem_bytes);
 
      /*
       * Increment the shared read generation. Do this occasionally even if eviction is not
@@ -524,16 +528,34 @@ static void WT_evict(cache_t *cache, const request_t *req) {
       */
     params->read_gen++;
 
-    __evict_update_work(cache);
+	/*
+	 * Commenting this out for now, because we are walking the tree and adding things
+	 * to queue elsewhere.
+	 */
+    /* __evict_update_work(cache);*/
     /* Under what conditions does the eviction server keep evicting? XXX */
-    __evict_lru_walk(cache, &entries_added);
+    /*__evict_lru_walk(cache, &entries_added); */
 
-    /* Keep evicting pages until there's something left in queues. */
+    /* Keep evicting pages until there's something left in queues.
     while (__evict_lru_pages(cache) == 0)
-        __btree_print(cache);
+        __btree_print(cache);*/
 
-    INFO("Evict queue empty\n");
+	if (queue->evict_current == params->evict_slots) {
+		queue->evict_current = 0;
+		WARN("Resetting evict_current to zero during evict operation\n");
+	}
+	if (queue->evict_current < 0 || queue->evict_current >= params->evict_slots)
+		ERROR("Evict current is out of range: %d\n",  queue->evict_current);
 
+	if (queue->elements[queue->evict_current] == NULL)
+		ERROR("Nothing to evict at position %d\n", queue->evict_current);
+
+	evict_victim = queue->elements[queue->evict_current];
+	queue->elements[queue->evict_current++] = NULL;
+
+	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
+		 params->cache_inmem_bytes);
+	__btree_remove(cache, evict_victim);
 }
 
 /**
@@ -657,7 +679,6 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
      * figuring out how many of the entries are candidates so we never end up with more candidates
      * than entries.
      */
-    INFO("__evict_lru_walk: clearing unneeded entries from a queue with %u entries\n", entries);
     while (entries > WT_EVICT_WALK_BASE) {
         queue->elements[--entries] = NULL;
     }
@@ -749,6 +770,7 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
     /* This executes if  WT_CACHE_EVICT_CLEAN is set. TODO: update for writes. */
     total_candidates = __cache_pages_inuse(params);
 //max_entries = MIN(max_entries, 1 + total_candidates / 2);
+	/* We need more max entries than WT native, because we are using only one queue */
     max_entries = MIN(max_entries, total_candidates);
     max_entries = MIN(max_entries, (params->evict_slots - slot));
 
@@ -771,8 +793,6 @@ __evict_walk(const cache_t *cache, WT_evict_queue *queue)
 
     entries_added = slot - queue->evict_entries;
 
-    INFO("__evict walk: old evict_entries = %d, new evict_entries = %d\n",
-         queue->evict_entries, slot);
     queue->evict_entries = slot;
     return (entries_added);
 }
