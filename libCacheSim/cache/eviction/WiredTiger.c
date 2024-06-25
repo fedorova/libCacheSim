@@ -18,8 +18,13 @@
 #define WT_CACHE_EVICT_HARD 1
 #define WT_EVICT_SCORE_BUMP 10
 #define WT_EVICT_SCORE_MAX 100
-#define WT_EVICT_WALK_BASE 300
-#define WT_EVICT_WALK_INCR 100
+
+/*
+ * XXX. For now double the size of these parameters, as they determine the evict queue size.
+ * WiredTiger uses two queues and we use one, so we need twice the space.
+ */
+#define WT_EVICT_WALK_BASE 600
+#define WT_EVICT_WALK_INCR 200
 
 #define WT_PAGE_EVICT_LRU 1
 
@@ -61,6 +66,8 @@ typedef enum { /* WiredTiger operations on pages */
 /* These flags must be powers of two -- so we have binary numbers with a single bit set. */
 #define WT_CACHE_EVICT_CLEAN 1 << 0
 #define WT_CACHE_EVICT_CLEAN_HARD 1 << 1
+
+unsigned int evicted_since_last_fill = 0;
 
 #ifdef __cplusplus
 extern "C" {
@@ -146,11 +153,8 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
 
     WT_params_t *params = (WT_params_t *)malloc(sizeof(WT_params_t));
     memset(params, 0, sizeof(WT_params_t));
-    /*
-     * XXX. For now double the queue size. WiredTiger uses two queues
-     * and we use one, so we need twice the space.
-     */
-    params->evict_slots = 2 * (WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR);
+
+    params->evict_slots = WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR;
     if ((params->evict_fill_queue.elements =
          malloc(sizeof(cache_obj_t*) * params->evict_slots)) == NULL)
         return NULL;
@@ -556,6 +560,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, evict_victim);
+	evicted_since_last_fill++;
 }
 
 /**
@@ -688,7 +693,10 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
         entries--;
     }
     queue->evict_entries = entries;
-    INFO("__evict_lru_walk: ended up with %d entries after clearing\n", entries);
+    INFO("__evict_lru_walk: got %d entries. %u evicted since last fill.\n",
+		 evicted_since_last_fill, queue->evict_entries);
+	/* This is not a WT variable -- using it for debugging */
+	evicted_since_last_fill = 0;
 
     if (entries == 0) {
         /*
@@ -714,9 +722,6 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
             if (!WT_READGEN_EVICT_SOON(read_gen_oldest))
                 break;
         }
-        INFO("__evict_lru_walk: gathered %d candidates out of %d entries."
-             "Oldest generation observed: %lu\n", candidates, entries, read_gen_oldest);
-
         /*
          * Take all candidates if we only gathered pages with an oldest
          * read generation set.
@@ -741,8 +746,6 @@ __evict_lru_walk(const cache_t *cache, int *entries_added_p)
             queue->evict_candidates = 1 + candidates + ((entries - candidates) - 1) / 3;
             params->read_gen_oldest = read_gen_oldest;
         }
-        INFO("__evict_lru_walk: ended up with %d evict_candidates. Set read_gen_oldest to %lu\n",
-             queue->evict_candidates, read_gen_oldest);
     }
     params->cache_eviction_pages_queued_post_lru += queue->evict_candidates;
     queue->evict_current = 0;
@@ -1587,9 +1590,6 @@ static inline bool
 __evict_queue_full(const cache_t *cache) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     WT_evict_queue *queue = &params->evict_fill_queue;
-
-    if (queue->evict_candidates > 500)
-        ERROR("CORRUPTED number of candidates!\n");
 
     /* This is what WiredTiger does. Don't use that for STRICT_2 */
     /* return (queue->evict_current == 0 && queue->evict_candidates != 0); */
