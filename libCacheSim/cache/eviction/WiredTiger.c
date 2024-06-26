@@ -220,8 +220,8 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
 
-    INFO("WT_find: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d, op = %d\n",
-         req->obj_id, req->parent_addr, req->read_gen, req->page_type, req->operation_type);
+	INFO("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
+		   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
 
     if (cache_obj != NULL) {
         if (!cache_obj->wt_page.in_tree || cache_obj->wt_page.page_type != req->page_type
@@ -344,7 +344,6 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         }
     }
 #endif /* STRICT_1 */
-#define STRICT_2
 #ifdef STRICT_2
     WT_evict_queue *queue;
     static int evict_added_surplus = 0;  /* Counter of objects we added to the evict queue. */
@@ -352,7 +351,6 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
 
     queue = &params->evict_fill_queue;
 
-	WARN("%ld bytes cached\n", params->cache_inmem_bytes);
 	if (req->operation_type == WT_ACCESS)
 		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
 			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
@@ -373,14 +371,10 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
         __evict_lru_walk(cache, &evict_items_added);
         evict_added_surplus += evict_items_added;
 
-        WARN("STRICT_2 evict_lru_walk added %d items. Surplus is %d.\n", evict_items_added,  evict_added_surplus);
+        WARN("STRICT_2 evict_lru_walk added %d items. Surplus is %d.\n", evict_items_added,
+			 evict_added_surplus);
     }
     else if (req->operation_type == WT_EVICT) { /* Done by WT_evict now */
-
-		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
-			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
-
-		/*
 		cache_obj_t *evict_victim;
 
         params->read_gen++;
@@ -401,7 +395,6 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
 		WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 			 params->cache_inmem_bytes);
 		__btree_remove(cache, evict_victim);
-		*/
 
     }
 #endif /* STRICT_2 */
@@ -519,7 +512,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 	WT_evict_queue *queue = &params->evict_fill_queue;
 	cache_obj_t *evict_victim;
-    int entries_added;
+    unsigned int evict_items_added = 0;
 
      /*
       * Increment the shared read generation. Do this occasionally even if eviction is not
@@ -549,6 +542,16 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
 	if (queue->elements[queue->evict_current] == NULL)
 		ERROR("Nothing to evict at position %d\n", queue->evict_current);
+
+	/*
+	 * For now we walk the tree on demand, when there's no items to evict.
+	 * In contrast, WiredTiger walks the tree and adds item to the evict
+	 * queue pro-actively.
+	 */
+	if (queue->elements[queue->evict_current] == NULL) {
+		 __evict_lru_walk(cache, &evict_items_added);
+		 WARN("INFO evict_lru_walk added %d items.\n", evict_items_added);
+	}
 
 	evict_victim = queue->elements[queue->evict_current];
 	queue->elements[queue->evict_current++] = NULL;
