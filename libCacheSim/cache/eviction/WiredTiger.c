@@ -540,9 +540,6 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	if (queue->evict_current < 0 || queue->evict_current >= params->evict_slots)
 		ERROR("Evict current is out of range: %d\n",  queue->evict_current);
 
-	if (queue->elements[queue->evict_current] == NULL)
-		ERROR("Nothing to evict at position %d\n", queue->evict_current);
-
 	/*
 	 * For now we walk the tree on demand, when there's no items to evict.
 	 * In contrast, WiredTiger walks the tree and adds item to the evict
