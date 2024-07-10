@@ -109,6 +109,7 @@ static uint64_t __evict_priority(const cache_t *cache, cache_obj_t *score);
 static inline bool __evict_queue_empty(const cache_t *cache);
 static inline bool __evict_queue_full(const cache_t *cache);
 static void __evict_queue_print(const cache_t *cache, WT_evict_queue *queue);
+static void __evict_read_gen_bump(const cache_t *cache, cache_obj_t *obj);
 static int __evict_walk(const cache_t *cache, WT_evict_queue *queue);
 static int __evict_walk_target(const cache_t *cache);
 static int __evict_walk_tree(const cache_t *cache, WT_evict_queue *queue, u_int max_entries,
@@ -553,6 +554,13 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	evict_victim = queue->elements[queue->evict_current];
 	queue->elements[queue->evict_current++] = NULL;
 
+	/*
+	 * Bump the read generation of the evicted page. WiredTiger does this for the scenario
+	 * when eviction fails. Eviction can't fail in our case, but we bump the read generation
+	 * anyway, so we can correctly compare the read generations of evict victims between WT
+	 * and our simulation.
+	 */
+	__evict_read_gen_bump(cache, evict_victim);
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, evict_victim);
@@ -1640,6 +1648,19 @@ __evict_queue_print(const cache_t *cache, WT_evict_queue *queue) {
         else
             WARN("%s\n", __btree_page_to_string(queue->elements[i]));
     }
+}
+
+static void
+__evict_read_gen_bump(const cache_t *cache, cache_obj_t *obj) {
+	WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+	if (obj->wt_page.read_gen == WT_READGEN_OLDEST)
+		return;
+
+	if (obj->wt_page.read_gen > params->read_gen)
+		return;
+
+	obj->wt_page.read_gen = params->read_gen + WT_READGEN_STEP;
 }
 
 static char* __op_to_string(int op) {
