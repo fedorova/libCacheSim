@@ -558,12 +558,14 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	queue->elements[queue->evict_current++] = NULL;
 
 	/*
-	 * Bump the read generation of the evicted page. WiredTiger does this for the scenario
-	 * when eviction fails. Eviction can't fail in our case, but we bump the read generation
-	 * anyway, so we can correctly compare the read generations of evict victims between WT
-	 * and our simulation.
+	 * WiredTiger bumps the read generation of the evicted page for the improbably scenario
+	 * when eviction fails. Eviction can't fail in our case, so we don't bump. WiredTiger
+	 * traces the read generations of the evicted pages before it bumps, so we can directly
+	 * compare the generations of the evicted pages between the native and the simulated
+	 * executions.
+	 *
+	 * __evict_read_gen_bump(cache, evict_victim);
 	 */
-	__evict_read_gen_bump(cache, evict_victim);
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, evict_victim);
