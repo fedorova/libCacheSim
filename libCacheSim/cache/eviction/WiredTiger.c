@@ -519,8 +519,11 @@ static void WT_evict(cache_t *cache, const request_t *req) {
       * Increment the shared read generation. Do this occasionally even if eviction is not
       * currently required, so that pages have some relative read generation when the eviction
       * server does need to do some work.
-      */
-    params->read_gen++;
+      *
+	  * We update the read generations of cached pages as we process the trace, so we don't
+	  * need to compute read generations ourselves.
+	  */
+    //params->read_gen++;
 
 	/*
 	 * Commenting this out for now, because we are walking the tree and adding things
