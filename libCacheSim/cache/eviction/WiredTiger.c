@@ -576,9 +576,11 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	 * An idealized __evict function, where we find the leaf page with the smallest
 	 * read generation to evict.
 	 */
-	cache_obj_t * min_readgen_leafobj = NULL;
+	cache_obj_t *min_readgen_leafobj = NULL;
 	__btree_walk_compute(cache, NULL, __btree_min_readgen_leaf, &min_readgen_leafobj);
 
+	if (min_readgen_leafobj == NULL)
+		ERROR("Ideal eviction: nothing to evict\n");
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(min_readgen_leafobj),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, min_readgen_leafobj);
@@ -1741,14 +1743,15 @@ static void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *re
 }
 
 static void __btree_min_readgen_leaf(const cache_t *cache, cache_obj_t *obj, void *ret_arg) {
-
 	cache_obj_t *min_readgen_obj = *(cache_obj_t**)ret_arg;
 
-	INFO("Calling walk function on %s\n", __btree_page_to_string(obj));
-	if (min_readgen_obj == NULL || min_readgen_obj->wt_page.page_type == WT_ROOT ||
-		obj->wt_page.read_gen < min_readgen_obj->wt_page.read_gen) {
+	if (obj->wt_page.page_type != WT_LEAF)
+		return;
+
+	if ((min_readgen_obj == NULL || min_readgen_obj->wt_page.read_gen == WT_READGEN_NOTSET)
+		|| (obj->wt_page.read_gen != WT_READGEN_NOTSET &&
+			obj->wt_page.read_gen < min_readgen_obj->wt_page.read_gen))
 		*(cache_obj_t**)ret_arg = obj;
-	}
 }
 
 #ifdef __cplusplus
