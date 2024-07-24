@@ -83,6 +83,8 @@ static void WT_print_cache(const cache_t *cache);
 /* Internal functions */
 
 /* BTree management */
+typedef void (*BTreeInquiryFunction)(const cache_t *, cache_obj_t *, void *);
+
 static cache_obj_t *__btree_find_parent(cache_obj_t *start, obj_id_t obj_id);
 static int __btree_init_page(cache_obj_t *obj, WT_params_t *params, short page_type,
                              cache_obj_t *parent_obj, int read_gen);
@@ -93,10 +95,10 @@ static void __btree_print(const cache_t *cache);
 static cache_obj_t * __btree_random_descent(const cache_t *cache);
 static uint64_t __btree_readgen_new(const cache_t *cache);
 static void __btree_remove(const cache_t *cache, cache_obj_t *obj);
+static void __btree_walk_compute(const cache_t *cache, cache_obj_t *curNode, BTreeInquiryFunction func, void* argp);
 static void __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
                                    int walk_flags);
-
-typedef void (*BTreeInquiryFunction)(const cache_t *, cache_obj_t *, void *);
+static void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *ret_arg);
 
 #define FLAG_SET(memory, value) (memory |= value)
 #define FLAG_ISSET(memory, value) ((memory & value) != 0)
@@ -573,420 +575,9 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	evicted_since_last_fill++;
 
 	/* Report the smallest read generation among the cached objects */
-	min_readgen_info_t mri;
-	memset(&mri, 0, sizeof(    return cache;
-}
-
-/**
- * free resources used by this cache
- *
- * @param cache
- */
-static void WT_free(cache_t *cache)
-{
-    /* TODO -- Walk the tree and free all objects */
-    cache_struct_free(cache);
-}
-
-/**
- * @brief this function is the user facing API
- * it performs the following logic
- *
- * ```
- * if obj in cache:
- *    update_metadata
- *    return true
- * else:
- *    if cache does not have enough space:
- *        evict until it has space to insert
- *    insert the object
- *    return false
- * ```
- *
- * @param cache
- * @param req
- * @return true if cache hit, false if cache miss
- */
-static bool WT_get(cache_t *cache, const request_t *req)
-{
-    return cache_get_base(cache, req);
-}
-
-// ***********************************************************************
-// ****                                                               ****
-// ****       developer facing APIs (used by cache developer)         ****
-// ****                                                               ****
-// ***********************************************************************
-
-/**
- * @brief check whether an object is in the cache
- *
- * @param cache
- * @param req
- * @param update_cache whether to update the cache,
- *  if true, the object is promoted
- *  and if the object is expired, it is removed from the cache
- * @return true on hit, false on miss
- */
-static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
-                             const bool update_cache) {
-    WT_params_t *params = (WT_params_t *)cache->eviction_params;
-    cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
-
-	INFO("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
-		   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
-
-    if (cache_obj != NULL) {
-        if (!cache_obj->wt_page.in_tree || cache_obj->wt_page.page_type != req->page_type
-            || cache_obj->wt_page.parent_page->obj_id != req->parent_addr) {
-            ERROR("Cached WiredTiger object changed essential properties.\n");
-        }
-        else if (cache_obj->wt_page.read_gen != req->read_gen) {
-            cache_obj->wt_page.read_gen = req->read_gen;
-        }
-    }
-
-    /*
-     * The STRICT modes below make the simulation more constrained, where we closely follow
-     * what WT does instead of fully simulating the algorithm on our own. This is useful for
-     * analysis and debugging.
-     */
-#ifdef STRICT
-    /* The strict mode simply evicts exactly the same objects as WiredTiger */
-
-    INFO("Entering STRICT\n");
-    /* STRICT mode: we mimic WiredTiger actions, don't do any simulation of our own */
-    if (req->operation_type == WT_EVICT) {
-        if (cache_obj == NULL)
-            ERROR("WiredTiger evicts object that we do not have\n");
-        INFO("PREEMPTIVE EVICTION\n");
-        __btree_remove(cache, cache_obj);
-        /*
-         * Below we will be returning an invalid pointer. We do that,
-         * because we don't want the cache code above us to register a miss and
-         * insert back the object that we just evicted. The code above us does
-         * not dereference the pointer, so it's safe to return garbage.
-         */
-        cache_obj = (cache_obj_t *) 0xDEADBEEF;
-    }
-#endif
-/* #define STRICT_1 */
-#ifdef STRICT_1
-    /*
-     * The STRICT_1 mode adds the same items to evict queues as WiredTiger and evicts objects at the same
-     * time as WiredTiger, but it does not evict the same objects as WiredTiger. Instead, it evicts objects
-     * that happen to be at the top of its evict queues. This mode cannot complete running, because eventually the
-     * simulation diverges from the trace. E.g., WiredTiger adds to queues objects we don't have. So we run out
-     * of things in queues and we have nothing to evict. Currently the code below will crash if the evict queue
-     * becomes empty, because it does not check if evict_current indexes a NULL entry.
-     */
-    cache_obj_t *evict_victim;
-    WT_evict_queue *queue =  &params->evict_fill_queue;
-
-    INFO("Entering STRICT_1\n");
-    if (req->operation_type != WT_ACCESS) {
-        if (cache_obj == NULL) {
-            WARN("WiredTiger makes an evict operation %d on an object that we do not have\n",
-                  req->operation_type);
-            if (req->operation_type == WT_EVICT || req->operation_type == WT_EVICT_ADD) {
-                WARN("WT %s on object we don't have: addr = %ld, parent_addr = %ld, read_gen = %d, type = %s\n",
-                       (req->operation_type==WT_EVICT)?"evict":"evict_add", req->obj_id, req->parent_addr, req->read_gen,
-                     (req->page_type==1)?"leaf":"internal");
-            }
-        }
-    }
-    if (req->operation_type == WT_EVICT_ADD && cache_obj != NULL) {
-        WARN("Entering STRICT_1 evict_add\n");
-        /* Since the object would be an eviction candidate, update the evict score. */
-        cache_obj->wt_page.evict_score = __evict_priority(cache, cache_obj);
-
-        if (queue->evict_entries == params->evict_slots) {
-            /*
-             * We have reached the tail of the queue.
-             */
-            WARN("EVICT QUEUE full in STRICT_1 mode, but WT adds %s\n",
-                 __btree_page_to_string(cache_obj));
-        } else {
-            WARN("Adding %s to evict queue at slot %d\n", __btree_page_to_string(cache_obj),
-                 (queue->evict_entries));
-            queue->elements[queue->evict_entries++] = cache_obj;
-        }
-
-        INFO("Sorting the queue\n");
-        /* Sort the queue */
-        qsort(queue->elements, queue->evict_entries, sizeof(cache_obj_t*),
-              __evict_qsort_compare);
-
-        /* Trim any null entries */
-        while (queue->evict_entries > 0 && queue->elements[queue->evict_entries-1] == NULL) {
-            WARN("Trimmed entry %d, new position is %d\n", queue->evict_entries+1,
-                 queue->evict_entries);
-            queue->evict_entries--;
-        }
-
-        /* Reset the pointer so that eviction begins to evict from the head of the queue */
-        if (queue->evict_entries < 0) {
-            queue->evict_entries = 0;
-            queue->evict_current = -1;
-            WARN("Evict queue empty in STRICT_1\n");
-        } else
-            queue->evict_current = 0;
-    }
-    else if (req->operation_type == WT_EVICT) {
-        WARN("Entering STRICT_1 evict\n");
-        /* Evict the top candidate */
-        if (queue->evict_current == params->evict_slots)
-            WARN("Evicting beyond the tail of EVICT QUEUE in STRICT_1 mode\n");
-        if (queue->evict_current == -1) {
-            WARN("WT evicts %s, but our queue is empty\n", __btree_page_to_string(cache_obj));
-        }
-        else {
-            /* Print the evict queue */
-            //__evict_queue_print(cache, queue);
-
-            WARN("Evicting evict_current = %d\n", queue->evict_current);
-            evict_victim = queue->elements[queue->evict_current];
-            queue->elements[queue->evict_current++] = NULL;
-
-            /* Compare our candidate with the WiredTiger candidate */
-            WARN("Simulation evicted: %s\n", __btree_page_to_string(evict_victim));
-            WARN("WiredTiger evicted: %s\n",
-                 (cache_obj==NULL)?"NULL":__btree_page_to_string(cache_obj));
-            __btree_remove(cache, evict_victim);
-        }
-    }
-#endif /* STRICT_1 */
-#ifdef STRICT_2
-    WT_evict_queue *queue;
-    static int evict_added_surplus = 0;  /* Counter of objects we added to the evict queue. */
-    int evict_items_added = 0;
-
-    queue = &params->evict_fill_queue;
-
-	if (req->operation_type == WT_ACCESS)
-		printf("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
-			   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
-    else if (req->operation_type == WT_EVICT_ADD) {
-        WARN("Entering STRICT_2 evict_add.\n");
-        /*
-         * WT_EVICT_ADD means that WiredTiger is adding a single item to the evict queue.
-         * Instead of also adding a single item, we call our code that walks the tree
-         * and adds multiple items. We record how many items we added. If we had added more
-         * items than WT, we don't keep adding more. Instead we wait until WiredTiger adds
-         * the same number of items before proceeding.
-         */
-        if (evict_added_surplus-- > 0) {
-            /* We already added more than WT. No need to add more */
-            WARN("STRICT_2: skipping evict_add. Current surplus is %d\n", evict_added_surplus);
-            goto done;
-        }
-        __evict_lru_walk(cache, &evict_items_added);
-        evict_added_surplus += evict_items_added;
-
-        WARN("STRICT_2 evict_lru_walk added %d items. Surplus is %d.\n", evict_items_added,
-			 evict_added_surplus);
-    }
-    else if (req->operation_type == WT_EVICT) { /* Done by WT_evict now */
-		cache_obj_t *evict_victim;
-
-        params->read_gen++;
-
-        if (queue->evict_current == params->evict_slots) {
-            queue->evict_current = 0;
-            WARN("Resetting evict_current to zero during evict operation in STRICT_2 mode\n");
-        }
-        if (queue->evict_current < 0 || queue->evict_current >= params->evict_slots)
-            ERROR("Evict current is out of range: %d\n",  queue->evict_current);
-
-        if (queue->elements[queue->evict_current] == NULL)
-            ERROR("Nothing to evict at position %d\n", queue->evict_current);
-
-        evict_victim = queue->elements[queue->evict_current];
-        queue->elements[queue->evict_current++] = NULL;
-
-		WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
-			 params->cache_inmem_bytes);
-		__btree_remove(cache, evict_victim);
-
-    }
-#endif /* STRICT_2 */
-    /*
-     * For all operation types except WT_ACCESS, the simulation code above us (in sim.c)
-     * will refrain from updating access count and miss count, in effect "ignoring"
-     * these operations. We use these special operation types to modify our cache state
-     * without running the normal simulation.
-     */
-  done:
-    if (req->operation_type != WT_ACCESS) {
-        WARN("Operation NOT access\n");
-        cache_obj = (cache_obj_t *) 0xDEADBEEF;
-    }
-
-    return cache_obj;
-}
-
-/**
- * @brief insert an object into the cache,
- * update the hash table and cache metadata
- * this function assumes the cache has enough space
- * and eviction is not part of this function
- *
- * @param cache
- * @param req
- * @return the inserted object
- */
-static cache_obj_t *WT_insert(cache_t *cache, const request_t *req) {
-    cache_obj_t *obj, *parent_page;
-    WT_params_t *params = (WT_params_t *)cache->eviction_params;
-
-    obj = cache_insert_base(cache, req);
-
-
-    INFO("WT_insert: addr = %ld, parent_addr = %ld, read_gen = %d, type = %d, op = %d\n",
-         req->obj_id, req->parent_addr, req->read_gen, req->page_type, req->operation_type);
-
-    if (params->BTree_root == NULL) {
-        /*
-         * B-Tree is not initialized. If we are processing the first record in the
-         * trace, we expect that record to identify the root node. If we see the
-         * record that does not identify the root note and the BTree is not initialized,
-         * this is an error.
-         */
-        if (req->parent_addr == 0) { /* Root is the only node with parent address zero. */
-            params->BTree_root = obj;
-            if (__btree_init_page(obj, params, WT_ROOT, NULL /* parent */, 0 /* read gen */) != 0)
-                return NULL;
-            return obj;
-        } else {
-            ERROR("WiredTiger BTree has not been initialized\n");
-                return NULL;
-        }
-    }
-
-    if (obj->wt_page.in_tree) {
-        ERROR("New WiredTiger object already in tree\n");
-        return NULL;
-    }
-
-    if (req->parent_addr == 0) {
-        ERROR("New root with root already present. Existing root address is %ld,"
-              "this root access has address %ld. We do not support more than one tree.\n",
-               params->BTree_root->obj_id, obj->obj_id);
-        return NULL;
-    }
-
-    /* The object is not root and is not in tree. Insert it under its parent. */
-    if((parent_page = __btree_find_parent(params->BTree_root, req->parent_addr)) == NULL) {
-        ERROR("Parent %ld of WiredTiger object %ld not found in WiredTiger tree. Cannot insert.\n",
-              req->parent_addr, obj->obj_id);
-        return NULL;
-    } else {
-        DEBUG_ASSERT(parent_page->obj_id == req->parent_addr);
-
-        if (__btree_init_page(obj, params, req->page_type, parent_page, req->read_gen) != 0)
-            return NULL;
-        if (insertPair(parent_page->wt_page.children, obj->obj_id, (void*)obj) != 0) {
-            ERROR("WiredTiger could not insert a child into the parent's map\n");
-            deleteMap(obj->wt_page.children);
-            return NULL;
-        }
-    }
-    return obj;
-}
-
-/**
- * @brief find the object to be evicted
- * this function does not actually evict the object or update metadata
- * not all eviction algorithms support this function
- * because the eviction logic cannot be decoupled from finding eviction
- * candidate, so use assert(false) if you cannot support this function
- *
- * @param cache
- * @return the object to be evicted
- */
-static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
-  WT_params_t *params = (WT_params_t *)cache->eviction_params;
-
-  WARN("WT_to_evict: \n");
-  DEBUG_ASSERT(false);
-  return NULL;
-}
-
-/**
- * @brief evict an object from the cache
- * it needs to call cache_evict_base before returning
- * which updates some metadata such as n_obj, occupied size, and hash table
- *
- * @param cache
- * @param req not used
- */
-static void WT_evict(cache_t *cache, const request_t *req) {
-    WT_params_t *params = (WT_params_t *)cache->eviction_params;
-	WT_evict_queue *queue = &params->evict_fill_queue;
-	cache_obj_t *evict_victim;
-    unsigned int evict_items_added = 0;
-
-     /*
-      * Increment the shared read generation. Do this occasionally even if eviction is not
-      * currently required, so that pages have some relative read generation when the eviction
-      * server does need to do some work.
-      *
-	  * We update the read generations of cached pages as we process the trace, so we don't
-	  * need to compute read generations ourselves.
-	  */
-    //params->read_gen++;
-
-	/*
-	 * Commenting this out for now, because we are walking the tree and adding things
-	 * to queue elsewhere.
-	 */
-    /* __evict_update_work(cache);*/
-    /* Under what conditions does the eviction server keep evicting? XXX */
-    /*__evict_lru_walk(cache, &entries_added); */
-
-    /* Keep evicting pages until there's something left in queues.
-    while (__evict_lru_pages(cache) == 0)
-        __btree_print(cache);*/
-
-	if (queue->evict_current == params->evict_slots) {
-		queue->evict_current = 0;
-		WARN("Resetting evict_current to zero during evict operation\n");
-	}
-	if (queue->evict_current < 0 || queue->evict_current >= params->evict_slots)
-		ERROR("Evict current is out of range: %d\n",  queue->evict_current);
-
-	/*
-	 * For now we walk the tree on demand, when there's no items to evict.
-	 * In contrast, WiredTiger walks the tree and adds item to the evict
-	 * queue pro-actively.
-	 */
-	if (queue->elements[queue->evict_current] == NULL) {
-		 __evict_lru_walk(cache, &evict_items_added);
-		 WARN("INFO evict_lru_walk added %d items.\n", evict_items_added);
-	}
-
-	evict_victim = queue->elements[queue->evict_current];
-	queue->elements[queue->evict_current++] = NULL;
-
-	/*
-	 * WiredTiger bumps the read generation of the evicted page for the improbably scenario
-	 * when eviction fails. Eviction can't fail in our case, so we don't bump. WiredTiger
-	 * traces the read generations of the evicted pages before it bumps, so we can directly
-	 * compare the generations of the evicted pages between the native and the simulated
-	 * executions.
-	 *
-	 * __evict_read_gen_bump(cache, evict_victim);
-	 */
-	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
-		 params->cache_inmem_bytes);
-	__btree_remove(cache, evict_victim);
-	evicted_since_last_fill++;
-
-	/* Report the smallest read generation among the cached objects */
 	cache_obj_t *min_readgen_obj = NULL;
 
 	__btree_walk_compute(cache, NULL, __btree_min_readgen, &min_readgen_obj);
-
 	INFO("Smallest read generation: %s\n", __btree_page_to_string(min_readgen_obj));
 }
 
@@ -1880,7 +1471,7 @@ __btree_walk_compute(const cache_t *cache, cache_obj_t *curNode,
 			__btree_walk_compute(cache, params->BTree_root, func, argp);
 	}
 	else {
-		if (curNode->wt_page.page_type == WT_INTERNAL) {
+		if (curNode->wt_page.page_type != WT_LEAF) {
 			if (getMapSize(curNode->wt_page.children) > 0) {
 				for (int i = 0; i < getMapSize(curNode->wt_page.children); i++)
 					__btree_walk_compute(cache,  getValueAtIndex(curNode->wt_page.children, i),
@@ -2122,13 +1713,14 @@ static char* __op_to_string(int op) {
     }
 }
 
-void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *ret_arg) {
+static void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *ret_arg) {
 
 	cache_obj_t *min_readgen_obj = *(cache_obj_t**)ret_arg;
 
-	if (min_readgen_obj == NULL ||
+	INFO("Calling walk function on %s\n", __btree_page_to_string(obj));
+	if (min_readgen_obj == NULL || min_readgen_obj->wt_page.page_type == WT_ROOT ||
 		obj->wt_page.read_gen < min_readgen_obj->wt_page.read_gen) {
-		min_readgen_obj = obj;
+		*(cache_obj_t**)ret_arg = obj;
 	}
 }
 
