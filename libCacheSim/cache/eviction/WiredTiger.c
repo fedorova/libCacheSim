@@ -99,6 +99,7 @@ static void __btree_walk_compute(const cache_t *cache, cache_obj_t *curNode, BTr
 static void __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
                                    int walk_flags);
 static void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *ret_arg);
+static void __btree_min_readgen_leaf(const cache_t *cache, cache_obj_t *obj, void *ret_arg);
 
 #define FLAG_SET(memory, value) (memory |= value)
 #define FLAG_ISSET(memory, value) ((memory & value) != 0)
@@ -569,6 +570,21 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	 *
 	 * __evict_read_gen_bump(cache, evict_victim);
 	 */
+#define IDEAL_EVICT
+#ifdef IDEAL_EVICT
+	/*
+	 * An idealized __evict function, where we find the leaf page with the smallest
+	 * read generation to evict.
+	 */
+	cache_obj_t * min_readgen_leafobj = NULL;
+	__btree_walk_compute(cache, NULL, __btree_min_readgen_leaf, &min_readgen_leafobj);
+
+	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(min_readgen_leafobj),
+		 params->cache_inmem_bytes);
+	__btree_remove(cache, min_readgen_leafobj);
+	evicted_since_last_fill++;
+
+#else
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, evict_victim);
@@ -579,6 +595,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
 	__btree_walk_compute(cache, NULL, __btree_min_readgen, &min_readgen_obj);
 	INFO("Smallest read generation: %s\n", __btree_page_to_string(min_readgen_obj));
+#endif
 }
 
 /**
@@ -1714,6 +1731,17 @@ static char* __op_to_string(int op) {
 }
 
 static void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *ret_arg) {
+
+	cache_obj_t *min_readgen_obj = *(cache_obj_t**)ret_arg;
+
+	INFO("Calling walk function on %s\n", __btree_page_to_string(obj));
+	if (min_readgen_obj == NULL || min_readgen_obj->wt_page.page_type == WT_ROOT ||
+		obj->wt_page.read_gen < min_readgen_obj->wt_page.read_gen) {
+		*(cache_obj_t**)ret_arg = obj;
+	}
+}
+
+static void __btree_min_readgen_leaf(const cache_t *cache, cache_obj_t *obj, void *ret_arg) {
 
 	cache_obj_t *min_readgen_obj = *(cache_obj_t**)ret_arg;
 
