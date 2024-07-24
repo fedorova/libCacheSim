@@ -592,7 +592,6 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 
 	/* Report the smallest read generation among the cached objects */
 	cache_obj_t *min_readgen_obj = NULL;
-
 	__btree_walk_compute(cache, NULL, __btree_min_readgen, &min_readgen_obj);
 	INFO("Smallest read generation: %s\n", __btree_page_to_string(min_readgen_obj));
 #endif
@@ -1731,12 +1730,12 @@ static char* __op_to_string(int op) {
 }
 
 static void __btree_min_readgen(const cache_t *cache, cache_obj_t *obj, void *ret_arg) {
-
 	cache_obj_t *min_readgen_obj = *(cache_obj_t**)ret_arg;
 
-	INFO("Calling walk function on %s\n", __btree_page_to_string(obj));
-	if (min_readgen_obj == NULL || min_readgen_obj->wt_page.page_type == WT_ROOT ||
-		obj->wt_page.read_gen < min_readgen_obj->wt_page.read_gen) {
+	if (min_readgen_obj == NULL ||
+		min_readgen_obj->wt_page.read_gen == WT_READGEN_NOTSET ||
+		(obj->wt_page.read_gen != WT_READGEN_NOTSET &&
+		 obj->wt_page.read_gen < min_readgen_obj->wt_page.read_gen)) {
 		*(cache_obj_t**)ret_arg = obj;
 	}
 }
