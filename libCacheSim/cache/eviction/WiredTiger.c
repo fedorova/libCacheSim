@@ -540,6 +540,23 @@ static void WT_evict(cache_t *cache, const request_t *req) {
     /* Keep evicting pages until there's something left in queues.
     while (__evict_lru_pages(cache) == 0)
         __btree_print(cache);*/
+#define IDEAL_EVICT
+#ifdef IDEAL_EVICT
+	/*
+	 * An idealized __evict function, where we find the leaf page with the smallest
+	 * read generation to evict.
+	 */
+	cache_obj_t *min_readgen_leafobj = NULL;
+	__btree_walk_compute(cache, NULL, __btree_min_readgen_leaf, &min_readgen_leafobj);
+
+	if (min_readgen_leafobj == NULL)
+		ERROR("Ideal eviction: nothing to evict\n");
+	WARN("Ideal evicted: %s. %ld bytes cached\n", __btree_page_to_string(min_readgen_leafobj),
+		 params->cache_inmem_bytes);
+	__btree_remove(cache, min_readgen_leafobj);
+	evicted_since_last_fill++;
+
+#else
 
 	if (queue->evict_current == params->evict_slots) {
 		queue->evict_current = 0;
@@ -570,23 +587,6 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	 *
 	 * __evict_read_gen_bump(cache, evict_victim);
 	 */
-#define IDEAL_EVICT
-#ifdef IDEAL_EVICT
-	/*
-	 * An idealized __evict function, where we find the leaf page with the smallest
-	 * read generation to evict.
-	 */
-	cache_obj_t *min_readgen_leafobj = NULL;
-	__btree_walk_compute(cache, NULL, __btree_min_readgen_leaf, &min_readgen_leafobj);
-
-	if (min_readgen_leafobj == NULL)
-		ERROR("Ideal eviction: nothing to evict\n");
-	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(min_readgen_leafobj),
-		 params->cache_inmem_bytes);
-	__btree_remove(cache, min_readgen_leafobj);
-	evicted_since_last_fill++;
-
-#else
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, evict_victim);
