@@ -19,8 +19,14 @@
 #define WT_EVICT_SCORE_BUMP 10
 #define WT_EVICT_SCORE_MAX 100
 
-#define WT_EVICT_WALK_BASE 300
-#define WT_EVICT_WALK_INCR 100
+/*
+ * These two parameters determine the size of the evict queue. WiredTiger has two
+ * regular evict queues; we have one. We double these parameters compared to what
+ * they are in WT so that we have the same number of total evict slots in our
+ * single queue.
+ */
+#define WT_EVICT_WALK_BASE 600 /* 300 in WiredTiger */
+#define WT_EVICT_WALK_INCR 200 /* 100 in WiredTiger */
 
 #define WT_PAGE_EVICT_LRU 1
 
@@ -540,7 +546,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
     /* Keep evicting pages until there's something left in queues.
     while (__evict_lru_pages(cache) == 0)
         __btree_print(cache);*/
-#define IDEAL_EVICT
+//#define IDEAL_EVICT
 #ifdef IDEAL_EVICT
 	/*
 	 * An idealized __evict function, where we find the leaf page with the smallest
