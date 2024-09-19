@@ -546,7 +546,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
     /* Keep evicting pages until there's something left in queues.
     while (__evict_lru_pages(cache) == 0)
         __btree_print(cache);*/
-//#define IDEAL_EVICT
+#define IDEAL_EVICT
 #ifdef IDEAL_EVICT
 	/*
 	 * An idealized __evict function, where we find the leaf page with the smallest
