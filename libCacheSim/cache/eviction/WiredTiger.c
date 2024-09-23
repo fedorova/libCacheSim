@@ -69,6 +69,7 @@ typedef enum { /* WiredTiger operations on pages */
 #define WT_CACHE_EVICT_CLEAN 1 << 0
 #define WT_CACHE_EVICT_CLEAN_HARD 1 << 1
 
+#define WT_BUCKET_RANGE_STEP 100
 unsigned int evicted_since_last_fill = 0;
 
 #ifdef __cplusplus
@@ -162,11 +163,6 @@ cache_t *WT_init(const common_cache_params_t ccache_params,
     WT_params_t *params = (WT_params_t *)malloc(sizeof(WT_params_t));
     memset(params, 0, sizeof(WT_params_t));
 
-    params->evict_slots = WT_EVICT_WALK_BASE + WT_EVICT_WALK_INCR;
-    if ((params->evict_fill_queue.elements =
-         malloc(sizeof(cache_obj_t*) * params->evict_slots)) == NULL)
-        return NULL;
-    memset(params->evict_fill_queue.elements, 0, sizeof(cache_obj_t*) * params->evict_slots);
     params->eviction_trigger = 95; /* default eviction trigger in WiredTiger */
     params->cache_size = ccache_params.cache_size;
     params->splitmempage = 8 * MAX(WT_MAX_MEMPAGE, WT_MAX_LEAFPAGE) / 10;

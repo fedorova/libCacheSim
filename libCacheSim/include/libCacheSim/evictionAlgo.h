@@ -37,16 +37,22 @@ typedef struct {
   int64_t n_byte_rewritten;
 } Clock_params_t;
 
-typedef struct {
-    cache_obj_t **elements;
-    u_int evict_entries; /* Number of entries filled; index of the first available evict entry */
-    u_int evict_candidates; /* How many evictable candidates we have */
-    u_int evict_current;    /* The current entry we are evicting */
-} WT_evict_queue;
 
+typedef struct __wt_evict_queue {
+    cache_obj_t* head;
+    cache_obj_t* tail;
+} wt_evict_queue_t;
+
+/* A bucket holding evict queue with candidates within the bucket's range of read generations */
+typedef struct __wt_evict_bucket {
+	int upper_bound; /* lower bound is upper bound minus range step */
+	wt_evict_queue_t evict_queue;       /* eviction candidates for this buffer */
+} wt_evict_bucket_t;
+
+#define WT_NUM_BUCKETS 100
 typedef struct {
     uint32_t global_read_generation;
-    WT_evict_queue evict_fill_queue;
+	wt_evict_bucket_t evict_buckets[WT_NUM_BUCKETS];
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
     uint64_t btree_inmem_bytes;

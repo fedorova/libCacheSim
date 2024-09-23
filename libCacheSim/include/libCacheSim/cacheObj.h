@@ -137,6 +137,7 @@ typedef struct {
   bool new_obj;
 } __attribute__((packed)) myclock_obj_params_t;
 
+/* WiredTiger page */
 typedef struct {
     uint64_t evict_flags;
     uint64_t evict_pass_gen;
@@ -147,6 +148,7 @@ typedef struct {
     int64_t read_gen;
     Map children;
     struct cache_obj *parent_page;
+	struct cache_obj *evict_obj_next;
 } wt_page_t;
 
 
