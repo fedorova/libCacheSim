@@ -49,10 +49,10 @@ typedef struct __wt_evict_bucket {
 	wt_evict_queue_t evict_queue;       /* eviction candidates for this buffer */
 } wt_evict_bucket_t;
 
-#define WT_NUM_BUCKETS 100
+#define WT_NUM_EVICT_BUCKETS 100
 typedef struct {
     uint32_t global_read_generation;
-	wt_evict_bucket_t evict_buckets[WT_NUM_BUCKETS];
+	wt_evict_bucket_t evict_buckets[WT_NUM_EVICT_BUCKETS];
     cache_obj_t *BTree_root;
     cache_obj_t *evict_ref;
     uint64_t btree_inmem_bytes;

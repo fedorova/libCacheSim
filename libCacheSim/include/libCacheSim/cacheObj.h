@@ -149,6 +149,8 @@ typedef struct {
     Map children;
     struct cache_obj *parent_page;
 	struct cache_obj *evict_obj_next;
+	struct cache_obj *evict_obj_prev;
+	int evict_bucket;
 } wt_page_t;
 
 
