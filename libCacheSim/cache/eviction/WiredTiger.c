@@ -85,12 +85,11 @@ static void __btree_min_readgen_leaf(const cache_t *cache, cache_obj_t *obj, voi
 /* Eviction */
 	static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *cache_obj, uint64_t readgen);
 static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj);
-static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj, int bucket);
-static void	__renumber_evict_buckets(const cache_t *cache);
+static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj);
+static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set);
 
 /* Other general functions */
 static char* __op_to_string(int op);
-
 
 /**
  * @brief initialize a WiredTiger cache
@@ -316,7 +315,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	wt_evict_bucket_t *bucket_set;
 	wt_evict_queue_t *queue;
 	cache_obj_t *evict_victim;
-	bool using_internal_bucket_seg = false;
+	bool using_internal_bucket_set = false;
 
 
 //#define IDEAL_EVICT
@@ -341,7 +340,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	 * First look for candidates in the bucket set for leaf pages.
 	 * If nothing there (unlikely) look through the internal page bucket set.
 	 */
-	bucket_set = params->evict_buckets[WT_BUCKET_SET_LEAF];
+	bucket_set = params->evict_buckets[WT_EVICT_BUCKET_SET_LEAF];
   retry:
 	for (int i = 0; i < WT_NUM_EVICT_BUCKETS; i++) {
 		/* LOCK QUEUE */
@@ -359,11 +358,12 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 			break;
 	}
 	if (evict_victim == NULL) {
-		if (using_internal_bucket_set)
+		if (using_internal_bucket_set) {
 			ERROR("Could not find anyone to evict\n");
+		}
 		else {
 			using_internal_bucket_set = true;
-			bucket_set = params->evict_buckets[WT_BUCKET_SET_INTERNAL];
+			bucket_set = params->evict_buckets[WT_EVICT_BUCKET_SET_INTERNAL];
 			goto retry;
 		}
 	}
@@ -563,9 +563,6 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
         deleteMap(obj->wt_page.children);
     }
 
-    if (obj == params->evict_ref)
-        params->evict_ref = NULL;
-
     DEBUG_ASSERT(removePair(obj->wt_page.parent_page->wt_page.children, obj->obj_id));
     INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id,
          obj->wt_page.parent_page->obj_id,
@@ -616,10 +613,10 @@ static char *
 __btree_page_to_string(cache_obj_t *obj) {
 
     snprintf((char*)&page_buffer, PAGE_PRINT_BUFFER_SIZE,
-             "page %lu [%lu], %s, read-gen: %ld, evict-score: %ld", obj->obj_id,
+             "page %lu [%lu], %s, read-gen: %ld, evict-bucket-set: %d, evict-bucket: %d", obj->obj_id,
              (obj->wt_page.parent_page == NULL)?0:obj->wt_page.parent_page->obj_id,
              (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
-             obj->wt_page.read_gen, obj->wt_page.evict_score);
+             obj->wt_page.read_gen, obj->wt_page.evict_bucket_set, obj->wt_page.evict_bucket);
     return (char *) page_buffer;
 }
 
