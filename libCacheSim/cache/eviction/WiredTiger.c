@@ -69,8 +69,6 @@ static void __btree_node_index_slot(cache_obj_t *obj, Map *children, int *slotp)
 static inline cache_obj_t * __btree_node_parent(cache_obj_t *node);
 static char * __btree_page_to_string(cache_obj_t *obj);
 static void __btree_print(const cache_t *cache);
-static cache_obj_t * __btree_random_descent(const cache_t *cache);
-static uint64_t __btree_readgen_new(const cache_t *cache);
 static void __btree_remove(const cache_t *cache, cache_obj_t *obj);
 static void __btree_walk_compute(const cache_t *cache, cache_obj_t *curNode, BTreeInquiryFunction func, void* argp);
 static void __btree_tree_walk_count(const cache_t *cache, cache_obj_t **nodep, int *walkcntp,
@@ -83,10 +81,11 @@ static void __btree_min_readgen_leaf(const cache_t *cache, cache_obj_t *obj, voi
 #define FLAG_CLEAR(memory, value) (((memory) &= ~(value)))
 
 /* Eviction */
-	static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *cache_obj, uint64_t readgen);
+static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *cache_obj, uint64_t readgen);
 static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj);
 static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj);
 static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set);
+static void __evict_print_bucket_set(const cache_t *cache, int bucket_set);
 
 /* Other general functions */
 static char* __op_to_string(int op);
@@ -317,7 +316,6 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	cache_obj_t *evict_victim;
 	bool using_internal_bucket_set = false;
 
-
 //#define IDEAL_EVICT
 #ifdef IDEAL_EVICT
 	/*
@@ -335,16 +333,17 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	evicted_since_last_fill++;
 
 #else
-
 	/*
 	 * First look for candidates in the bucket set for leaf pages.
 	 * If nothing there (unlikely) look through the internal page bucket set.
 	 */
 	bucket_set = params->evict_buckets[WT_EVICT_BUCKET_SET_LEAF];
+	INFO("EVICT: search in leaf bucket set\n");
   retry:
 	for (int i = 0; i < WT_NUM_EVICT_BUCKETS; i++) {
 		/* LOCK QUEUE */
 		if ((evict_victim = bucket_set[i].evict_queue.head) != NULL) {
+			INFO("evict victim found in bucket %d, upper range %d\n", i, bucket_set[i].upper_bound);
 			bucket_set[i].evict_queue.head = evict_victim->wt_page.evict_obj_next;
 			if (evict_victim->wt_page.evict_obj_next != NULL)
 				evict_victim->wt_page.evict_obj_next->wt_page.evict_obj_prev = NULL;
@@ -364,6 +363,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 		else {
 			using_internal_bucket_set = true;
 			bucket_set = params->evict_buckets[WT_EVICT_BUCKET_SET_INTERNAL];
+			WARN("EVICT: search internal bucket set\n");
 			goto retry;
 		}
 	}
@@ -398,7 +398,6 @@ static bool WT_remove(cache_t *cache, const obj_id_t obj_id) {
     if (obj == NULL) {
         return false;
     }
-
     __btree_remove(cache, obj);
     return true;
 }
@@ -502,6 +501,10 @@ __btree_init_page(const cache_t *cache, cache_obj_t *obj, short page_type,
 
     if (page_type != WT_LEAF)
         params->btree_internal_pages++;
+
+	INFO("After inserting new page\n");
+	__evict_print_bucket_set(cache,
+							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
     return 0;
 }
 
@@ -563,6 +566,11 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
         deleteMap(obj->wt_page.children);
     }
 
+	__remove_from_evict_bucket(cache, obj);
+	INFO("After removing page\n");
+	__evict_print_bucket_set(cache,
+							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
+
     DEBUG_ASSERT(removePair(obj->wt_page.parent_page->wt_page.children, obj->obj_id));
     INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id,
          obj->wt_page.parent_page->obj_id,
@@ -606,7 +614,7 @@ __btree_walk_compute(const cache_t *cache, cache_obj_t *curNode,
  * to use this global buffer. We do this, so that we don't have to dynamically allocate the memory
  * and the caller doesn't need to free it for us.
  */
-#define PAGE_PRINT_BUFFER_SIZE 70
+#define PAGE_PRINT_BUFFER_SIZE 80
 char page_buffer[PAGE_PRINT_BUFFER_SIZE];
 
 static char *
@@ -618,13 +626,6 @@ __btree_page_to_string(cache_obj_t *obj) {
              (obj->wt_page.page_type == WT_LEAF)?"leaf":(obj->wt_page.page_type == WT_INTERNAL)?"int":"root",
              obj->wt_page.read_gen, obj->wt_page.evict_bucket_set, obj->wt_page.evict_bucket);
     return (char *) page_buffer;
-}
-
-static uint64_t
-__btree_readgen_new(const cache_t *cache) {
-    WT_params_t *params = (WT_params_t *)cache->eviction_params;
-
-    return (params->read_gen + params->read_gen_oldest) / 2;
 }
 
 static char* __op_to_string(int op) {
@@ -667,6 +668,8 @@ static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *obj, 
 	WT_params_t *params = (WT_params_t *)cache->eviction_params;
 	int my_bucket, my_bucket_set;
 
+	INFO("Update read generation from %ld to %ld: %s\n", obj->wt_page.read_gen, read_gen, __btree_page_to_string(obj));
+
 	my_bucket = obj->wt_page.evict_bucket;
 	my_bucket_set = obj->wt_page.evict_bucket_set;
 	obj->wt_page.read_gen = read_gen;
@@ -682,9 +685,17 @@ static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *obj, 
 		(params->evict_buckets[my_bucket_set][my_bucket].upper_bound - WT_EVICT_BUCKET_RANGE))
 		return;
 	/* Otherwise, remove from the current bucket and add to the new bucket */
+	INFO("Removing from bucket set %d, bucket %d (upper_range = %d)\n", my_bucket_set, my_bucket,
+		 params->evict_buckets[my_bucket_set][my_bucket].upper_bound);
 	__remove_from_evict_bucket(cache, obj);
 
 	__add_to_evict_bucket(cache, obj);
+	INFO("New bucket is: %d (upper range = %d)\n",
+		 obj->wt_page.evict_bucket, params->evict_buckets[my_bucket_set][obj->wt_page.evict_bucket].upper_bound);
+
+	INFO("After read generation update\n");
+	__evict_print_bucket_set(cache,
+							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
 }
 
 static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
@@ -698,6 +709,8 @@ static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	my_bucket = obj->wt_page.evict_bucket;
 	my_bucket_set = obj->wt_page.evict_bucket_set;
 	queue = &params->evict_buckets[my_bucket_set][my_bucket].evict_queue;
+
+	INFO("Remove from bucket set %d, bucket %d %s\n", my_bucket_set, my_bucket, __btree_page_to_string(obj));
 
 	/* LOCK QUEUE */
 	if (queue->head == obj)
@@ -714,6 +727,7 @@ static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	/* UNLOCK QUEUE */
 
 	obj->wt_page.evict_obj_next = obj->wt_page.evict_obj_prev = NULL;
+	obj->wt_page.evict_bucket = WT_NUM_EVICT_BUCKETS;
 
 }
 
@@ -729,6 +743,8 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 		bucket_set = WT_EVICT_BUCKET_SET_LEAF;
 	else
 		bucket_set = WT_EVICT_BUCKET_SET_INTERNAL;
+
+	INFO("Add to evict bucket %s\n", __btree_page_to_string(obj));
 
   retry:
 	/* Find the right bucket for the object */
@@ -747,6 +763,7 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 		 * else were updating the zero-th bucket upper bound. In that case, place the object
 		 * into the last bucket.
 		 */
+		INFO("Adding to bucket %d\n", bucket);
 		if (bucket > WT_NUM_EVICT_BUCKETS - 1) {
 			ERROR("Bucket out of range"); /* Should never happen in a single threaded simulation */
 		}
@@ -770,15 +787,20 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
  * increase the upper range of each bucket. We move the queue of each bucket one level
  * down.
  */
-	static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set) {
+static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set) {
+
 	WT_params_t *params = (WT_params_t *)cache->eviction_params;
 	wt_evict_queue_t *queue, *lower_queue;
+
+	INFO("Renumber evict buckets for bucket set %d\n", bucket_set);
+	params->evict_buckets[bucket_set][0].upper_bound += WT_EVICT_BUCKET_RANGE;
 
 	for (int i = 1; i < WT_NUM_EVICT_BUCKETS; i++) {
 		params->evict_buckets[bucket_set][i].upper_bound += WT_EVICT_BUCKET_RANGE;
 		queue = &params->evict_buckets[bucket_set][i].evict_queue;
 		lower_queue = &params->evict_buckets[bucket_set][i-1].evict_queue;
 
+		INFO("Bucket %d's new upper bound is %d\n", i, params->evict_buckets[bucket_set][i].upper_bound);
 		/* LOCK LOWER QUEUE */
 		/* LOCK UPPER QUEUE */
 		if (queue->head == NULL)
@@ -799,6 +821,32 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	  unlock:
 		/* UNLOCK LOWER QUEUE */
 		/* UNLOCK UPPER QUEUE */
+	}
+	INFO("After renumbering\n");
+	__evict_print_bucket_set(cache, bucket_set);
+}
+
+static void __evict_print_queue(wt_evict_queue_t *evict_queue) {
+	cache_obj_t *cur;
+
+	printf("Head = %p, tail = %p\n", evict_queue->head, evict_queue->tail);
+
+	cur = evict_queue->head;
+	while(cur != NULL) {
+		printf("cur = %p, prev = %p, next = %p\n", cur, cur->wt_page.evict_obj_prev, cur->wt_page.evict_obj_next);
+		printf("\t %s\n", __btree_page_to_string(cur));
+		cur = cur->wt_page.evict_obj_next;
+	}
+}
+
+static void __evict_print_bucket_set(const cache_t *cache, int bucket_set) {
+	WT_params_t *params = (WT_params_t *)cache->eviction_params;
+
+	printf("+++++ EVICT BUCKET SET %d [%s]\n", bucket_set, bucket_set==WT_EVICT_BUCKET_SET_INTERNAL?"internal":"leaf");
+
+	for (int i = 0; i < WT_NUM_EVICT_BUCKETS; i++) {
+		printf("======= Bucket %d, upper bound = %d ==========\n", i, params->evict_buckets[bucket_set][i].upper_bound);
+		__evict_print_queue(&params->evict_buckets[bucket_set][i].evict_queue);
 	}
 }
 
