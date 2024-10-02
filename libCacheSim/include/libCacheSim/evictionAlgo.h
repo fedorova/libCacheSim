@@ -50,46 +50,19 @@ typedef struct __wt_evict_bucket {
 } wt_evict_bucket_t;
 
 #define WT_NUM_EVICT_BUCKETS 100
+#define WT_EVICT_BUCKET_SETS 2
+#define WT_EVICT_BUCKET_SET_INTERNAL 0
+#define WT_EVICT_BUCKET_SET_LEAF 1
+
 typedef struct {
     uint32_t global_read_generation;
-	wt_evict_bucket_t evict_buckets[WT_NUM_EVICT_BUCKETS];
+	wt_evict_bucket_t evict_buckets[WT_EVICT_BUCKET_SETS][WT_NUM_EVICT_BUCKETS];
     cache_obj_t *BTree_root;
-    cache_obj_t *evict_ref;
     uint64_t btree_inmem_bytes;
     uint64_t btree_internal_pages;
     uint64_t btree_total_pages;
-    uint64_t cache_eviction_internal_pages_already_queued;
-    uint64_t cache_eviction_internal_pages_queued;
-    uint64_t cache_eviction_internal_pages_seen;
-    uint64_t cache_eviction_pages_already_queued;
-    uint64_t cache_eviction_pages_queued;
-    uint64_t cache_eviction_pages_queued_post_lru;
-
-    uint64_t cache_eviction_pages_seen;
-    uint64_t cache_eviction_queue_empty;
-    uint64_t cache_eviction_queue_not_empty;
-    uint64_t cache_eviction_walk;
-    uint64_t cache_eviction_walks_abandoned;
-    uint64_t cache_eviction_walks_ended;
-    uint64_t cache_eviction_walks_gave_up_ratio;
-    uint64_t cache_eviction_walks_gave_up_no_targets;
-    uint64_t cache_eviction_walk_passes;
-    uint64_t cache_eviction_walks_started;
-    uint64_t cache_eviction_walks_stopped;
     uint64_t cache_inmem_bytes;
     uint64_t cache_size;
-    bool evict_aggressive;
-    uint32_t evict_empty_score;
-    uint32_t evict_flags;
-    uint64_t evict_pass_gen;   /* total available evict slots */
-    uint64_t evict_priority;
-    uint32_t evict_slots;      /* total available evict slots */
-    uint64_t eviction_target;  /* target percent cache full for eviction */
-    uint64_t eviction_trigger; /* percent cache full when we begin eviction */
-    u_int evict_start_type;
-    uint64_t evict_walk_period;
-    uint32_t evict_walk_progress;
-    uint32_t evict_walk_target;
     uint64_t pages_evicted;
     uint64_t pages_inmem;
     uint64_t read_gen;

@@ -139,9 +139,6 @@ typedef struct {
 
 /* WiredTiger page */
 typedef struct {
-    uint64_t evict_flags;
-    uint64_t evict_pass_gen;
-    uint64_t evict_score;
     bool in_tree;
     int64_t last_access_time;
     int8_t page_type;
@@ -151,6 +148,7 @@ typedef struct {
 	struct cache_obj *evict_obj_next;
 	struct cache_obj *evict_obj_prev;
 	int evict_bucket;
+	int evict_bucket_set;
 } wt_page_t;
 
 
