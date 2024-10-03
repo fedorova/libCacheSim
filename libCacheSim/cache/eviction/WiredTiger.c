@@ -614,7 +614,7 @@ __btree_walk_compute(const cache_t *cache, cache_obj_t *curNode,
  * to use this global buffer. We do this, so that we don't have to dynamically allocate the memory
  * and the caller doesn't need to free it for us.
  */
-#define PAGE_PRINT_BUFFER_SIZE 80
+#define PAGE_PRINT_BUFFER_SIZE 100
 char page_buffer[PAGE_PRINT_BUFFER_SIZE];
 
 static char *
@@ -727,7 +727,7 @@ static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	/* UNLOCK QUEUE */
 
 	obj->wt_page.evict_obj_next = obj->wt_page.evict_obj_prev = NULL;
-	obj->wt_page.evict_bucket = WT_NUM_EVICT_BUCKETS;
+	obj->wt_page.evict_bucket = -1;
 
 }
 
@@ -744,6 +744,7 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	else
 		bucket_set = WT_EVICT_BUCKET_SET_INTERNAL;
 
+	obj->wt_page.evict_bucket_set = bucket_set;
 	INFO("Add to evict bucket %s\n", __btree_page_to_string(obj));
 
   retry:
@@ -756,18 +757,19 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 		goto retry;
 	}
 	else {
-		bucket = (obj->wt_page.read_gen - params->evict_buckets[bucket_set][0].upper_bound)
-			/ WT_EVICT_BUCKET_RANGE;
+		bucket = obj->wt_page.read_gen / WT_EVICT_BUCKET_RANGE;
 		/*
 		 * Our bucket may be out of range if we computed the bucket number while someone
 		 * else were updating the zero-th bucket upper bound. In that case, place the object
 		 * into the last bucket.
 		 */
-		INFO("Adding to bucket %d\n", bucket);
 		if (bucket > WT_NUM_EVICT_BUCKETS - 1) {
 			ERROR("Bucket out of range"); /* Should never happen in a single threaded simulation */
 		}
 	}
+	INFO("Adding to bucket %d\n", bucket);
+	obj->wt_page.evict_bucket = bucket;
+
 	queue = &params->evict_buckets[bucket_set][bucket].evict_queue;
 	/* LOCK QUEUE */
 	if (queue->head == NULL) {
