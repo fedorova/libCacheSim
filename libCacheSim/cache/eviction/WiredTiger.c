@@ -22,6 +22,12 @@
 
 #define WT_THOUSAND 1000
 
+#define WT_CLEAR_EVICT_STATE(obj) \
+	obj->wt_page.evict_bucket = -1; \
+	obj->wt_page.evict_bucket_set = -1; \
+	obj->wt_page.evict_obj_prev = obj->wt_page.evict_obj_next = NULL;
+
+#define WT_EVICT_BUCKET_SET(obj) obj->wt_page.evict_bucket >= 0
 
 typedef enum { /* WiredTiger operations on pages */
     WT_ACCESS,    /* WT accessed the page */
@@ -194,9 +200,10 @@ static cache_obj_t *WT_find(cache_t *cache, const request_t *req,
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
     cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
 
+#if 0
 	INFO("%ld,%ld,%ld,%ld,%d,%d,%d\n", req->clock_time, req->obj_id, req->obj_size,
 		   req->parent_addr, req->page_type, req->read_gen, req->operation_type);
-
+#endif
     if (cache_obj != NULL) {
         if (!cache_obj->wt_page.in_tree || cache_obj->wt_page.page_type != req->page_type
             || cache_obj->wt_page.parent_page->obj_id != req->parent_addr) {
@@ -312,7 +319,6 @@ static cache_obj_t *WT_to_evict(cache_t *cache, const request_t *req) {
 static void WT_evict(cache_t *cache, const request_t *req) {
     WT_params_t *params = (WT_params_t *)cache->eviction_params;
 	wt_evict_bucket_t *bucket_set;
-	wt_evict_queue_t *queue;
 	cache_obj_t *evict_victim;
 	bool using_internal_bucket_set = false;
 
@@ -333,6 +339,8 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	evicted_since_last_fill++;
 
 #else
+	INFO("Before eviction: Leaf bucket set\n");
+	__evict_print_bucket_set(cache, WT_EVICT_BUCKET_SET_LEAF);
 	/*
 	 * First look for candidates in the bucket set for leaf pages.
 	 * If nothing there (unlikely) look through the internal page bucket set.
@@ -348,8 +356,8 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 			if (evict_victim->wt_page.evict_obj_next != NULL)
 				evict_victim->wt_page.evict_obj_next->wt_page.evict_obj_prev = NULL;
 			else {
-				DEBUG_ASSERT(queue->tail == evict_victim);
-				queue->tail = NULL;
+				DEBUG_ASSERT(bucket_set[i].evict_queue.tail == evict_victim);
+				bucket_set[i].evict_queue.tail = NULL;
 			}
 		}
 		/* UNLOCK QUEUE */
@@ -367,6 +375,7 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 			goto retry;
 		}
 	}
+	WT_CLEAR_EVICT_STATE(evict_victim);
 	WARN("evicted: %s. %ld bytes cached\n", __btree_page_to_string(evict_victim),
 		 params->cache_inmem_bytes);
 	__btree_remove(cache, evict_victim);
@@ -502,9 +511,11 @@ __btree_init_page(const cache_t *cache, cache_obj_t *obj, short page_type,
     if (page_type != WT_LEAF)
         params->btree_internal_pages++;
 
+#if 0
 	INFO("After inserting new page\n");
 	__evict_print_bucket_set(cache,
 							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
+#endif
     return 0;
 }
 
@@ -566,7 +577,8 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
         deleteMap(obj->wt_page.children);
     }
 
-	__remove_from_evict_bucket(cache, obj);
+	if (WT_EVICT_BUCKET_SET(obj))
+		__remove_from_evict_bucket(cache, obj);
 	INFO("After removing page\n");
 	__evict_print_bucket_set(cache,
 							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
@@ -692,10 +704,11 @@ static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *obj, 
 	__add_to_evict_bucket(cache, obj);
 	INFO("New bucket is: %d (upper range = %d)\n",
 		 obj->wt_page.evict_bucket, params->evict_buckets[my_bucket_set][obj->wt_page.evict_bucket].upper_bound);
-
+#if 0
 	INFO("After read generation update\n");
 	__evict_print_bucket_set(cache,
 							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
+#endif
 }
 
 static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
@@ -727,8 +740,7 @@ static void __remove_from_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	/* UNLOCK QUEUE */
 
 	obj->wt_page.evict_obj_next = obj->wt_page.evict_obj_prev = NULL;
-	obj->wt_page.evict_bucket = -1;
-
+	WT_CLEAR_EVICT_STATE(obj);
 }
 
 static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
@@ -795,6 +807,9 @@ static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set) {
 	wt_evict_queue_t *queue, *lower_queue;
 
 	INFO("Renumber evict buckets for bucket set %d\n", bucket_set);
+	INFO("Before renumbering\n");
+	__evict_print_bucket_set(cache, bucket_set);
+
 	params->evict_buckets[bucket_set][0].upper_bound += WT_EVICT_BUCKET_RANGE;
 
 	for (int i = 1; i < WT_NUM_EVICT_BUCKETS; i++) {
@@ -847,8 +862,10 @@ static void __evict_print_bucket_set(const cache_t *cache, int bucket_set) {
 	printf("+++++ EVICT BUCKET SET %d [%s]\n", bucket_set, bucket_set==WT_EVICT_BUCKET_SET_INTERNAL?"internal":"leaf");
 
 	for (int i = 0; i < WT_NUM_EVICT_BUCKETS; i++) {
-		printf("======= Bucket %d, upper bound = %d ==========\n", i, params->evict_buckets[bucket_set][i].upper_bound);
-		__evict_print_queue(&params->evict_buckets[bucket_set][i].evict_queue);
+		if (params->evict_buckets[bucket_set][i].evict_queue.head != NULL) {
+			printf("======= Bucket %d, upper bound = %d ==========\n", i, params->evict_buckets[bucket_set][i].upper_bound);
+			__evict_print_queue(&params->evict_buckets[bucket_set][i].evict_queue);
+		}
 	}
 }
 
