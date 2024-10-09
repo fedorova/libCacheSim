@@ -505,7 +505,12 @@ __btree_init_page(const cache_t *cache, cache_obj_t *obj, short page_type,
     if (read_gen > params->read_gen)
         params->read_gen = read_gen;
 
-	if (page_type != WT_ROOT)
+	WT_CLEAR_EVICT_STATE(obj);
+	/*
+	 * We don't add the root to the evict queue. We don't add pages whose read generation is not
+	 * set. They will be added once the read generation is set.
+	 */
+	if (page_type != WT_ROOT && obj->wt_page.read_gen != WT_READGEN_NOTSET)
 		__add_to_evict_bucket(cache, obj);
 
     if (page_type != WT_LEAF)
@@ -692,15 +697,16 @@ static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *obj, 
 	 * we will make the wrong decision, which is okay, because bucket ranges don't
 	 * change dramatically, and we tolerate some degree of inaccuracy in bucket placement.
 	 */
-	if (obj->wt_page.read_gen < params->evict_buckets[my_bucket_set][my_bucket].upper_bound &&
-		obj->wt_page.read_gen >=
-		(params->evict_buckets[my_bucket_set][my_bucket].upper_bound - WT_EVICT_BUCKET_RANGE))
-		return;
-	/* Otherwise, remove from the current bucket and add to the new bucket */
-	INFO("Removing from bucket set %d, bucket %d (upper_range = %d)\n", my_bucket_set, my_bucket,
-		 params->evict_buckets[my_bucket_set][my_bucket].upper_bound);
-	__remove_from_evict_bucket(cache, obj);
-
+	if (WT_EVICT_BUCKET_SET(obj)) {
+		if (obj->wt_page.read_gen < params->evict_buckets[my_bucket_set][my_bucket].upper_bound &&
+			obj->wt_page.read_gen >=
+			(params->evict_buckets[my_bucket_set][my_bucket].upper_bound - WT_EVICT_BUCKET_RANGE))
+			return;
+		/* Otherwise, remove from the current bucket and add to the new bucket */
+		INFO("Removing from bucket set %d, bucket %d (upper_range = %d)\n", my_bucket_set, my_bucket,
+			 params->evict_buckets[my_bucket_set][my_bucket].upper_bound);
+		__remove_from_evict_bucket(cache, obj);
+	}
 	__add_to_evict_bucket(cache, obj);
 	INFO("New bucket is: %d (upper range = %d)\n",
 		 obj->wt_page.evict_bucket, params->evict_buckets[my_bucket_set][obj->wt_page.evict_bucket].upper_bound);
