@@ -48,6 +48,8 @@ typedef enum { /* WiredTiger operations on pages */
 
 #define WT_EVICT_BUCKET_RANGE 100
 
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -765,27 +767,24 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 		bucket_set = WT_EVICT_BUCKET_SET_INTERNAL;
 
 	obj->wt_page.evict_bucket_set = bucket_set;
-/*	INFO("Add to evict bucket %s\n", __btree_page_to_string(obj)); */
 
-  retry:
+
 	/* Find the right bucket for the object */
-	if (obj->wt_page.read_gen < params->evict_buckets[bucket_set][0].upper_bound)
-		bucket = 0;
-	else if (obj->wt_page.read_gen >=
-			 params->evict_buckets[bucket_set][WT_NUM_EVICT_BUCKETS-1].upper_bound) {
+	while (obj->wt_page.read_gen >=
+		   params->evict_buckets[bucket_set][WT_NUM_EVICT_BUCKETS-1].upper_bound)
 		__renumber_evict_buckets(cache, bucket_set);
-		goto retry;
-	}
-	else {
-		bucket = obj->wt_page.read_gen / WT_EVICT_BUCKET_RANGE;
-		/*
-		 * Our bucket may be out of range if we computed the bucket number while someone
-		 * else were updating the zero-th bucket upper bound. In that case, place the object
-		 * into the last bucket.
-		 */
-		if (bucket > WT_NUM_EVICT_BUCKETS - 1) {
-			ERROR("Bucket out of range"); /* Should never happen in a single threaded simulation */
-		}
+
+	bucket = max(0, (obj->wt_page.read_gen - params->evict_buckets[bucket_set][0].upper_bound + WT_EVICT_BUCKET_RANGE)
+				 / WT_EVICT_BUCKET_RANGE);
+	INFO("Add to evict bucket %d %s\n", bucket, __btree_page_to_string(obj));
+
+	/*
+	 * Our bucket may be out of range if we computed the bucket number while someone
+	 * else were updating the zero-th bucket upper bound. In that case, place the object
+	 * into the last bucket.
+	 */
+	if (bucket > WT_NUM_EVICT_BUCKETS - 1) {
+		ERROR("Bucket out of range"); /* Should never happen in a single threaded simulation */
 	}
 	obj->wt_page.evict_bucket = bucket;
 
