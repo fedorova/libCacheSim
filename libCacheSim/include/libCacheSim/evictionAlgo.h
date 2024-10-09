@@ -49,7 +49,7 @@ typedef struct __wt_evict_bucket {
 	wt_evict_queue_t evict_queue;       /* eviction candidates for this buffer */
 } wt_evict_bucket_t;
 
-#define WT_NUM_EVICT_BUCKETS 3
+#define WT_NUM_EVICT_BUCKETS 100
 #define WT_EVICT_BUCKET_SETS 2
 #define WT_EVICT_BUCKET_SET_INTERNAL 0
 #define WT_EVICT_BUCKET_SET_LEAF 1

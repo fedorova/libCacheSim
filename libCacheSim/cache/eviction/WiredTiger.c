@@ -824,18 +824,13 @@ static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set) {
 	wt_evict_queue_t *queue, *lower_queue;
 
 	INFO("Renumber evict buckets for bucket set %d\n", bucket_set);
-	INFO("Before renumbering\n");
-	__evict_print_bucket_set(cache, bucket_set);
 
 	params->evict_buckets[bucket_set][0].upper_bound += WT_EVICT_BUCKET_RANGE;
-
 	for (int i = 1; i < WT_NUM_EVICT_BUCKETS; i++) {
 		/* Do we use CAS or a lock? */
 		params->evict_buckets[bucket_set][i].upper_bound += WT_EVICT_BUCKET_RANGE;
 		INFO("Bucket %d's new upper bound is %d\n", i, params->evict_buckets[bucket_set][i].upper_bound);
 	}
-	INFO("After renumbering\n");
-	__evict_print_bucket_set(cache, bucket_set);
 }
 
 static void __evict_print_queue(wt_evict_queue_t *evict_queue) {
