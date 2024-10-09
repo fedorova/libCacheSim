@@ -339,8 +339,10 @@ static void WT_evict(cache_t *cache, const request_t *req) {
 	evicted_since_last_fill++;
 
 #else
+#if 0
 	INFO("Before eviction: Leaf bucket set\n");
 	__evict_print_bucket_set(cache, WT_EVICT_BUCKET_SET_LEAF);
+#endif
 	/*
 	 * First look for candidates in the bucket set for leaf pages.
 	 * If nothing there (unlikely) look through the internal page bucket set.
@@ -803,8 +805,19 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 
 /*
  * If the object's read generation exceeds the upper range of the largest bucket we
- * increase the upper range of each bucket. We move the queue of each bucket one level
- * down.
+ * increase the upper range of each bucket. We do not move the contents of the bucket
+ * to the bucket with the appropriate range. So, for example, a page with a read
+ * generation 250, which used to be in the bucket with the upper range 300 would
+ * end up in the bucket with the upper range 400. That's okay, because the page are
+ * still approximately sorted according to their read generations.
+ *
+ * Hypothetically, we could have a new page with read generation, say, 275, which
+ * would go into the bucket with the upper range 200 after renumbering, so a page
+ * with the read generation 275 would end up in a lower bucket than the page with
+ * the read generation 250. However, in reality this shouldn't happen, because we
+ * just renumbered our buckets, meaning that the current read generation was increased
+ * above those in the evict buckets, so we can't have a new page with the old
+ * read generation.
  */
 static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set) {
 
@@ -818,31 +831,9 @@ static void	__renumber_evict_buckets(const cache_t *cache, int bucket_set) {
 	params->evict_buckets[bucket_set][0].upper_bound += WT_EVICT_BUCKET_RANGE;
 
 	for (int i = 1; i < WT_NUM_EVICT_BUCKETS; i++) {
+		/* Do we use CAS or a lock? */
 		params->evict_buckets[bucket_set][i].upper_bound += WT_EVICT_BUCKET_RANGE;
-		queue = &params->evict_buckets[bucket_set][i].evict_queue;
-		lower_queue = &params->evict_buckets[bucket_set][i-1].evict_queue;
-
 		INFO("Bucket %d's new upper bound is %d\n", i, params->evict_buckets[bucket_set][i].upper_bound);
-		/* LOCK LOWER QUEUE */
-		/* LOCK UPPER QUEUE */
-		if (queue->head == NULL)
-			goto unlock;
-
-		/* Move our current queue into the lower queue */
-		if (lower_queue->head == NULL) {
-			lower_queue->head = queue->head;
-			lower_queue->tail = queue->tail;
-		}
-		else {
-			lower_queue->tail->wt_page.evict_obj_next = queue->head;
-			queue->head->wt_page.evict_obj_prev = lower_queue->tail;
-			lower_queue->tail = queue->tail;
-		}
-		queue->head = NULL;
-		queue->tail = NULL;
-	  unlock:
-		/* UNLOCK LOWER QUEUE */
-		/* UNLOCK UPPER QUEUE */
 	}
 	INFO("After renumbering\n");
 	__evict_print_bucket_set(cache, bucket_set);
