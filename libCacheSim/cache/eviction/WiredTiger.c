@@ -584,10 +584,11 @@ __btree_remove(const cache_t *cache, cache_obj_t *obj) {
 
 	if (WT_EVICT_BUCKET_SET(obj))
 		__remove_from_evict_bucket(cache, obj);
+#if 0
 	INFO("After removing page\n");
 	__evict_print_bucket_set(cache,
 							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
-
+#endif
     DEBUG_ASSERT(removePair(obj->wt_page.parent_page->wt_page.children, obj->obj_id));
     INFO("Removed object %lu from parent %lu (map %p)\n", obj->obj_id,
          obj->wt_page.parent_page->obj_id,
@@ -703,14 +704,13 @@ static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *obj, 
 			(params->evict_buckets[my_bucket_set][my_bucket].upper_bound - WT_EVICT_BUCKET_RANGE))
 			return;
 		/* Otherwise, remove from the current bucket and add to the new bucket */
-		INFO("Removing from bucket set %d, bucket %d (upper_range = %d)\n", my_bucket_set, my_bucket,
-			 params->evict_buckets[my_bucket_set][my_bucket].upper_bound);
 		__remove_from_evict_bucket(cache, obj);
 	}
 	__add_to_evict_bucket(cache, obj);
+#if 0
 	INFO("New bucket is: %d (upper range = %d)\n",
 		 obj->wt_page.evict_bucket, params->evict_buckets[my_bucket_set][obj->wt_page.evict_bucket].upper_bound);
-#if 0
+
 	INFO("After read generation update\n");
 	__evict_print_bucket_set(cache,
 							 (obj->wt_page.page_type == WT_INTERNAL) ? WT_EVICT_BUCKET_SET_INTERNAL : WT_EVICT_BUCKET_SET_LEAF);
@@ -763,7 +763,7 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 		bucket_set = WT_EVICT_BUCKET_SET_INTERNAL;
 
 	obj->wt_page.evict_bucket_set = bucket_set;
-	INFO("Add to evict bucket %s\n", __btree_page_to_string(obj));
+/*	INFO("Add to evict bucket %s\n", __btree_page_to_string(obj)); */
 
   retry:
 	/* Find the right bucket for the object */
@@ -785,7 +785,6 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 			ERROR("Bucket out of range"); /* Should never happen in a single threaded simulation */
 		}
 	}
-	INFO("Adding to bucket %d\n", bucket);
 	obj->wt_page.evict_bucket = bucket;
 
 	queue = &params->evict_buckets[bucket_set][bucket].evict_queue;
