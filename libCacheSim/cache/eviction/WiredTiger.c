@@ -769,7 +769,7 @@ static void __add_to_evict_bucket(const cache_t *cache, cache_obj_t *obj) {
 	/* Find the right bucket for the object */
 	if (obj->wt_page.read_gen < params->evict_buckets[bucket_set][0].upper_bound)
 		bucket = 0;
-	else if (obj->wt_page.read_gen >
+	else if (obj->wt_page.read_gen >=
 			 params->evict_buckets[bucket_set][WT_NUM_EVICT_BUCKETS-1].upper_bound) {
 		__renumber_evict_buckets(cache, bucket_set);
 		goto retry;
