@@ -690,6 +690,14 @@ static void	__evict_update_obj_read_gen(const cache_t *cache, cache_obj_t *obj, 
 	WT_params_t *params = (WT_params_t *)cache->eviction_params;
 	int my_bucket, my_bucket_set;
 
+	/*
+	 * WiredTiger may temporarily unset the read generation of an object.
+	 * We don't want to reflect that in our eviction structures, so
+	 * we ignore this request.
+	 */
+	if (read_gen == WT_READGEN_NOTSET)
+		return;
+
 	INFO("Update read generation from %ld to %ld: %s\n", obj->wt_page.read_gen, read_gen, __btree_page_to_string(obj));
 
 	my_bucket = obj->wt_page.evict_bucket;
